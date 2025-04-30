@@ -56,8 +56,8 @@ def xyxy_to_xywh(xyxy):
     x1, y1, x2, y2 = xyxy
     w = x2 - x1
     h = y2 - y1
-    x = x1 + w/2
-    y = y1 + h/2
+    x = x1  # 使用左上角x坐标
+    y = y1  # 使用左上角y坐标
     return np.array([x, y, w, h])
 
 def process_frame(model, frame):
@@ -335,6 +335,8 @@ def process_video(video_path, yolo_weights, output_path):
 if __name__ == '__main__':
     video_path = '/Users/binzeng/MA/EvaluateVideos/2_clip_02_rightpart_48.mp4'
     yolo_weights = '/Users/binzeng/MA/EvaluateVideos/finetune.pt'
-    output_path = 'basemodel_2_clip_02_rightpart_48.mp4'
+    # 构造输出路径：将文件名放入 results 文件夹下
+    output_path = os.path.join('/Users/binzeng/MA/Basemodel/results', os.path.basename(video_path))
+
     
     process_video(video_path, yolo_weights, output_path) 
