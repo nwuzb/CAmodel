@@ -11,7 +11,7 @@ from PIL import Image
 # YOLO检测参数
 DETECTION_PARAMS = {
     'conf': 0.7,      # 置信度阈值：用于过滤检测结果，值越高要求越严格
-    'iou': 0.3,       # IoU阈值：用于非极大值抑制，值越高允许的框重叠程度越高
+    'iou': 0.4,       # IoU阈值：用于非极大值抑制，值越高允许的框重叠程度越高
     'max_det': 300,   # 每帧最大检测数：限制每帧检测的最大目标数量
     'classes': [0],   # 只检测人类（class 0）
 }
@@ -22,7 +22,7 @@ TRACKING_PARAMS = {
     'nn_budget': 100,              # 控制历史外观特征数量
     'max_age': 30,                 # 目标消失后保持跟踪的最大帧数
     'n_init': 2,                   # 确认为稳定跟踪目标所需的最小检测帧数
-    'max_iou_distance': 0.7,       # 最大IoU距离：用于跟踪匹配，值越大允许的运动越大
+    'max_iou_distance': 1.0,       # 最大IoU距离：用于跟踪匹配，值越大允许的运动越大
 }
 
 # 可视化参数
@@ -333,7 +333,7 @@ def process_video(video_path, yolo_weights, output_path):
     print(f"输出视频保存为: {output_path}")
 
 if __name__ == '__main__':
-    video_path = '/Users/binzeng/MA/EvaluateVideos/2_clip_02_rightpart_48.mp4'
+    video_path = '/Users/binzeng/MA/EvaluateVideos/2_clip_03_rightpart_122.mp4'
     yolo_weights = '/Users/binzeng/MA/EvaluateVideos/finetune.pt'
     # 构造输出路径：将文件名放入 results 文件夹下
     output_path = os.path.join('/Users/binzeng/MA/Basemodel/results', os.path.basename(video_path))
