@@ -96,9 +96,93 @@ class ImageEncoder(object):
         return out
 
 
+class SavedModelEncoder(object):
+    """TensorFlow SavedModel格式的特征提取器类"""
+    
+    def __init__(self, model_dir, input_name="images", output_name="features"):
+        # 加载SavedModel格式模型
+        self.model = tf.saved_model.load(model_dir)
+        
+        # 查找模型的输入输出签名
+        self.signatures = list(self.model.signatures.keys())
+        self.input_name = input_name
+        self.output_name = output_name
+        
+        # 假设模型有默认签名
+        self.infer = self.model.signatures["serving_default"]
+        
+        # 获取输入和输出张量名称
+        self.input_tensor_name = list(self.infer.structured_input_signature[1].keys())[0]
+        
+        # 获取输出特征维度
+        # 由于SavedModel的特性，我们可能需要实际运行一次模型来获取特征维度
+        # 确保输入是float32类型
+        dummy_input = np.zeros((1, 128, 64, 3), dtype=np.float32)  # 使用float32类型
+        dummy_output = self.infer(**{self.input_tensor_name: tf.convert_to_tensor(dummy_input)})
+        
+        # 获取输出特征维度和输入图像形状
+        output_key = list(dummy_output.keys())[0]
+        self.feature_dim = dummy_output[output_key].shape[-1]
+        self.image_shape = [128, 64, 3]  # 默认图像形状
+        
+        print(f"加载SavedModel成功。输入签名: {self.input_tensor_name}, 特征维度: {self.feature_dim}")
+        
+    def __call__(self, data_x, batch_size=32):
+        # 数据预处理: 确保数据是浮点数且在[0,1]范围内
+        data_x = data_x.astype(np.float32) / 255.0
+        
+        # 创建输出数组
+        out = np.zeros((len(data_x), self.feature_dim), np.float32)
+        
+        # 分批处理数据
+        for i in range(0, len(data_x), batch_size):
+            batch = data_x[i:i+batch_size]
+            # 运行推理
+            batch_tensor = tf.convert_to_tensor(batch, dtype=tf.float32)  # 明确指定为float32类型
+            results = self.infer(**{self.input_tensor_name: batch_tensor})
+            
+            # 提取特征
+            output_key = list(results.keys())[0]
+            features = results[output_key].numpy()
+            out[i:i+len(batch)] = features
+            
+        return out
+
+
 def create_box_encoder(model_filename, input_name="images",
                        output_name="features", batch_size=32):
-    image_encoder = ImageEncoder(model_filename, input_name, output_name)
+    """
+    创建一个编码器函数，根据边界框提取特征
+    
+    参数:
+    model_filename: 字符串，模型文件路径或SavedModel目录
+    input_name: 模型输入张量名称
+    output_name: 模型输出张量名称
+    batch_size: 批处理大小
+    
+    返回:
+    encoder: 函数，接受图像和边界框列表，返回对应的特征向量
+    """
+    # 判断是文件还是目录，以确定模型类型
+    if os.path.isdir(model_filename):
+        print(f"检测到SavedModel目录: {model_filename}")
+        try:
+            # 使用SavedModel加载器
+            image_encoder = SavedModelEncoder(model_filename, input_name, output_name)
+            print(f"成功加载SavedModel: {model_filename}")
+        except Exception as e:
+            print(f"加载SavedModel失败: {e}")
+            raise
+    else:
+        # 使用原始的冻结图模型加载器
+        print(f"加载冻结图模型文件: {model_filename}")
+        try:
+            image_encoder = ImageEncoder(model_filename, input_name, output_name)
+            print(f"成功加载冻结图模型: {model_filename}")
+        except Exception as e:
+            print(f"加载冻结图模型失败: {e}")
+            raise
+            
     image_shape = image_encoder.image_shape
 
     def encoder(image, boxes):

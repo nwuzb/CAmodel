@@ -11,7 +11,7 @@ from application_util import preprocessing
 from application_util import visualization
 from deep_sort import nn_matching
 from deep_sort.detection import Detection
-from deep_sort.tracker import Tracker
+from deep_sort.tracker import Tracker, AccelerationTracker
 
 
 def gather_sequence_info(sequence_dir, detection_file):
@@ -128,7 +128,9 @@ def create_detections(detection_mat, frame_idx, min_height=0):
 
 def run(sequence_dir, detection_file, output_file, min_confidence,
         nms_max_overlap, min_detection_height, max_cosine_distance,
-        nn_budget, display):
+        nn_budget, display, use_acceleration=False, max_age=30, n_init=3, max_iou_distance=0.7,
+        std_weight_position=1.0/20, std_weight_velocity=1.0/160, std_weight_acceleration=1.0/10,
+        velocity_smooth_factor=0.85, acceleration_smooth_factor=0.7):
     """Run multi-target tracker on a particular sequence.
 
     Parameters
@@ -155,16 +157,72 @@ def run(sequence_dir, detection_file, output_file, min_confidence,
         is enforced.
     display : bool
         If True, show visualization of intermediate tracking results.
-
+    use_acceleration : bool
+        If True, use Kalman filter with acceleration model.
+    max_age : int
+        Maximum number of missed misses before a track is deleted.
+    n_init : int
+        Number of consecutive detections before the track is confirmed.
+    max_iou_distance : float
+        Maximum IOU distance for matching by IOU.
+    std_weight_position : float
+        卡尔曼滤波器位置过程噪声权重
+    std_weight_velocity : float
+        卡尔曼滤波器速度过程噪声权重
+    std_weight_acceleration : float
+        卡尔曼滤波器加速度过程噪声权重
+    velocity_smooth_factor : float
+        速度平滑因子
+    acceleration_smooth_factor : float
+        加速度平滑因子
     """
     seq_info = gather_sequence_info(sequence_dir, detection_file)
     metric = nn_matching.NearestNeighborDistanceMetric(
         "cosine", max_cosine_distance, nn_budget)
-    tracker = Tracker(metric)
+    
+    # 根据参数选择使用哪种跟踪器
+    if use_acceleration:
+        # 获取图像尺寸用于加速度跟踪器
+        image_size = seq_info["image_size"]
+        image_width = image_size[1] if image_size and len(image_size) >= 2 else 1920
+        image_height = image_size[0] if image_size and len(image_size) >= 2 else 1080
+        frame_size = (image_width, image_height)
+        
+        # 创建加速度跟踪器
+        tracker = AccelerationTracker(
+            metric, 
+            max_iou_distance=max_iou_distance,
+            max_age=max_age, 
+            n_init=n_init,
+            frame_size=frame_size
+        )
+        
+        # 配置卡尔曼滤波器参数
+        if hasattr(tracker.kf, '_std_weight_position'):
+            tracker.kf._std_weight_position = std_weight_position
+            tracker.kf._std_weight_velocity = std_weight_velocity
+            tracker.kf._std_weight_acceleration = std_weight_acceleration
+            
+            # 如果存在平滑因子参数，也进行配置
+            if hasattr(tracker.kf, '_velocity_smooth_factor'):
+                tracker.kf._velocity_smooth_factor = velocity_smooth_factor
+                tracker.kf._acceleration_smooth_factor = acceleration_smooth_factor
+                
+            print(f"已配置卡尔曼滤波器参数:")
+            print(f"  位置噪声权重: {tracker.kf._std_weight_position}")
+            print(f"  速度噪声权重: {tracker.kf._std_weight_velocity}")
+            print(f"  加速度噪声权重: {tracker.kf._std_weight_acceleration}")
+            print(f"  速度平滑因子: {tracker.kf._velocity_smooth_factor if hasattr(tracker.kf, '_velocity_smooth_factor') else 'N/A'}")
+            print(f"  加速度平滑因子: {tracker.kf._acceleration_smooth_factor if hasattr(tracker.kf, '_acceleration_smooth_factor') else 'N/A'}")
+    else:
+        # 创建普通跟踪器
+        tracker = Tracker(metric, max_iou_distance=max_iou_distance, max_age=max_age, n_init=n_init)
+
     results = []
 
     def frame_callback(vis, frame_idx):
-        print("Processing frame %05d" % frame_idx)
+        if frame_idx % 200 == 0: # 每200帧打印一次
+            print("Processing frame %05d" % frame_idx)
 
         # Load image and generate detections.
         detections = create_detections(
@@ -252,6 +310,33 @@ def parse_args():
     parser.add_argument(
         "--display", help="Show intermediate tracking results",
         default=True, type=bool_string)
+    parser.add_argument(
+        "--use_acceleration", help="Use Kalman filter with acceleration model",
+        default=False, type=bool_string)
+    parser.add_argument(
+        "--max_age", help="Maximum number of missed misses before a track is deleted",
+        default=30, type=int)
+    parser.add_argument(
+        "--n_init", help="Number of consecutive detections before the track is confirmed",
+        default=3, type=int)
+    parser.add_argument(
+        "--max_iou_distance", help="Maximum IOU distance for matching by IOU",
+        default=0.7, type=float)
+    parser.add_argument(
+        "--std_weight_position", help="卡尔曼滤波器位置过程噪声权重",
+        default=1.0/20, type=float)
+    parser.add_argument(
+        "--std_weight_velocity", help="卡尔曼滤波器速度过程噪声权重",
+        default=1.0/160, type=float)
+    parser.add_argument(
+        "--std_weight_acceleration", help="卡尔曼滤波器加速度过程噪声权重",
+        default=1.0/10, type=float)
+    parser.add_argument(
+        "--velocity_smooth_factor", help="速度平滑因子",
+        default=0.85, type=float)
+    parser.add_argument(
+        "--acceleration_smooth_factor", help="加速度平滑因子",
+        default=0.7, type=float)
     return parser.parse_args()
 
 
@@ -260,4 +345,7 @@ if __name__ == "__main__":
     run(
         args.sequence_dir, args.detection_file, args.output_file,
         args.min_confidence, args.nms_max_overlap, args.min_detection_height,
-        args.max_cosine_distance, args.nn_budget, args.display)
+        args.max_cosine_distance, args.nn_budget, args.display, args.use_acceleration,
+        args.max_age, args.n_init, args.max_iou_distance,
+        args.std_weight_position, args.std_weight_velocity, args.std_weight_acceleration,
+        args.velocity_smooth_factor, args.acceleration_smooth_factor)
