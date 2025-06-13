@@ -58,33 +58,10 @@ from tools.generate_detections import create_box_encoder
 from ultralytics import YOLO
 
 # ================ 配置参数（可修改） ================
-# 新增：只需输入包含视频和gt.txt的文件夹路径
-FOLDER_PATH = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_2_clip_03_right_124"  # ✅带gt及其对应视频的文件夹
-
-# 自动查找视频和gt.txt文件
-VIDEO_PATH = None
-GT_PATH = None
-if os.path.isdir(FOLDER_PATH):
-    # 查找视频文件（支持常见格式）
-    video_exts = [".mp4"]
-    for fname in os.listdir(FOLDER_PATH):
-        if any(fname.lower().endswith(ext) for ext in video_exts):
-            VIDEO_PATH = os.path.join(FOLDER_PATH, fname)
-            break
-    # 查找gt.txt
-    gt_file = os.path.join(FOLDER_PATH, "gt.txt")
-    if os.path.isfile(gt_file):
-        GT_PATH = gt_file
-    # 错误处理
-    if VIDEO_PATH is None:
-        raise FileNotFoundError(f"未在文件夹 {FOLDER_PATH} 下找到视频文件（支持: {video_exts}）")
-    if GT_PATH is None:
-        raise FileNotFoundError(f"未在文件夹 {FOLDER_PATH} 下找到 gt.txt 文件")
-else:
-    raise NotADirectoryError(f"指定的 FOLDER_PATH 不是有效文件夹: {FOLDER_PATH}")
-
-# 输出目录自动命名
-OUTPUT_DIR = FOLDER_PATH + "-results2"  # 可根据需要自定义
+# 输入文件路径
+VIDEO_PATH = "/Users/binzeng/MA/GT_videos/gt_60_4_clip_02_right_99/4-clip_02_rightpart_99.mp4"  # 视频文件路径
+GT_PATH = "/Users/binzeng/MA/GT_videos/gt_60_4_clip_02_right_99/gt.txt"         # 真值标注文件路径
+OUTPUT_DIR = "/Users/binzeng/MA/results/before_60_4_clip_02_right_99"  # ❗️❗️❗️❗️结果保存目录，每次运行要使用空文件夹，否则会使用源文件，会变大
 # 如果输出目录已存在则清空,不存在则创建 ❗️❗️❗️❗️❗️
 if os.path.exists(OUTPUT_DIR):
     shutil.rmtree(OUTPUT_DIR)
@@ -92,18 +69,23 @@ os.makedirs(OUTPUT_DIR)
 
 # YOLO模型参数
 YOLO_PARAMS = {
+    # 'model_path': "/Users/binzeng/Downloads/freeze23.pt",  # YOLO模型权重路径
     'model_path': "/Users/binzeng/MA/EvaluateVideos/finetune.pt",  # YOLO模型权重路径
+    # 'model_path': "/Users/binzeng/Downloads/free23rect.pt",  # YOLO模型权重路径
+    # 'model_path': "/Users/binzeng/Downloads/freeze10rect.pt",  # YOLO模型权重路径
+    # 'model_path': "/Users/binzeng/Downloads/freeze10.pt",  # YOLO模型权重路径
     'conf_thres': 0.7,           # 置信度阈值
     'iou_thres': 0.5,           # NMS IOU阈值
     'img_size': 736,             # 输入图像大小
     'device': 'mps' if torch.backends.mps.is_available() else 'cpu',  # 设备选择
+
 }
 
 # DeepSORT 跟踪参数
 TRACKING_PARAMS = { 
     'min_confidence': 0.5,         # 检测置信度阈值
     'nms_max_overlap': 0.5,        # 非极大值抑制阈值
-    'min_detection_height': 20,    # 最小检测框高度 💊 20不错
+    'min_detection_height': 15,    # 最小检测框高度 💊 20不错
     'max_cosine_distance': 0.4,    # 特征匹配距离阈值
     'nn_budget': 60,               # 特征库大小
     'max_age': 30,                 # 目标消失后保持跟踪的最大帧数（增大，允许更长时间的遮挡）💊
@@ -127,6 +109,8 @@ VISUALIZATION_PARAMS = {
     'remap_ids': True,                 # 是否重映射ID
     'show_original_id': False,         # 是否显示原始ID
     'line_margin': 0.2,                # 计数线位置（相对于图像宽度的比例）
+    'show_detection_boxes': False,     # 不显示检测框
+    'show_counting_lines': False,      # 不显示计数线
 }
 
 # 特征提取模型路径（如果为空，将使用默认的mars-small128.pb）
@@ -238,17 +222,68 @@ def generate_detections_with_yolo(sequence_dir, model):
     
     # 创建特征提取器
     try:
-        model_filename = MODEL_PATH
-        if not os.path.exists(model_filename):
-            print(f"指定的模型路径不存在: {model_filename}")
-            return None
+        # 如果未指定模型路径，尝试自动查找
+        if not MODEL_PATH:
+            # 根据freeze_model.py中的信息，查找可能的模型位置
+            possible_paths = [
+                # 相对于当前文件的路径
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
+                           "resources/networks/mars-small128.pb"),
+                # 相对于项目根目录的路径
+                "./deep_sort/resources/networks/mars-small128.pb",
+                "./resources/networks/mars-small128.pb",
+                "../resources/networks/mars-small128.pb",
+                # 绝对路径
+                "/Users/binzeng/MA/CAmodel/deep_sort/resources/networks/mars-small128.pb",
+                "/Users/binzeng/MA/CAmodel/resources/networks/mars-small128.pb",
+                "/Users/binzeng/MA/EvaluateVideos/mars-small128.pb"
+            ]
+            
+            # 遍历所有可能的路径
+            model_filename = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    model_filename = path
+                    break
+            
+            if model_filename is None:
+                print("警告: 无法找到特征提取模型文件，将使用简单的颜色直方图特征提取器")
+                raise FileNotFoundError("无法找到特征提取模型文件")
+        else:
+            model_filename = MODEL_PATH
+            if not os.path.exists(model_filename):
+                raise FileNotFoundError(f"指定的模型路径不存在: {model_filename}")
+        
         print(f"加载特征提取器模型: {model_filename}")
         encoder = create_box_encoder(model_filename, batch_size=32) # 创建特征提取器
         print(f"特征提取器已加载: {model_filename}")
     except Exception as e:
         print(f"创建特征提取器时出错: {e}")
-        print("无法加载特征提取模型，程序终止。")
-        return None
+        print("使用简单的颜色直方图特征提取器作为后备方案")
+        
+        # 创建一个简单的特征提取器（基于颜色直方图）作为后备
+        def simple_encoder(image, boxes):
+            features = []
+            for box in boxes:
+                x, y, w, h = map(int, box)
+                if x < 0 or y < 0 or w <= 0 or h <= 0 or x+w > image.shape[1] or y+h > image.shape[0]:
+                    features.append(np.zeros(512))
+                    continue
+                
+                roi = image[y:y+h, x:x+w]
+                if roi.size > 0:
+                    # 计算颜色直方图作为特征
+                    hist = cv2.calcHist([roi], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
+                    hist = cv2.normalize(hist, hist).flatten()
+                    # 将特征扩展到512维
+                    feature = np.zeros(512)
+                    feature[:min(len(hist), 512)] = hist[:min(len(hist), 512)]
+                    features.append(feature)
+                else:
+                    features.append(np.zeros(512))
+            return np.array(features)
+        
+        encoder = simple_encoder
     
     # 处理每一帧
     frame_indices = sorted(image_filenames.keys())
@@ -604,31 +639,7 @@ def visualize_results(video_path, tracking_result, output_dir):
                 mask = tracking_data[:, 0] == frame_count
                 results = tracking_data[mask]
 
-                # 画计数线
-                cv2.line(frame, (left_line, 0), (left_line, height), (0, 255, 255), 2)
-                cv2.line(frame, (right_line, 0), (right_line, height), (0, 255, 255), 2)
-
-                # 画YOLO检测框（红色）
-                if yolo_dets is not None:
-                    try:
-                        dets_this_frame = yolo_dets[yolo_dets[:, 0] == frame_count]
-                        for det in dets_this_frame:
-                            try:
-                                x, y, w, h = map(int, det[2:6])
-                                
-                                # 添加安全检查，确保x、y、w、h是有效的坐标值
-                                if (np.isnan(x) or np.isnan(y) or np.isnan(w) or np.isnan(h) or 
-                                    w <= 0 or h <= 0 or x < 0 or y < 0 or 
-                                    x + w >= width or y + h >= height):
-                                    # 跳过无效的边界框
-                                    continue
-                                    
-                                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)  # 红色
-                            except Exception as e:
-                                print(f"绘制YOLO检测框时出错: {e}")
-                                continue
-                    except Exception as e:
-                        print(f"处理YOLO检测结果时出错: {e}")
+                # 不显示计数线和检测框，但保持计数功能
 
                 for row in results:
                     try:
@@ -676,12 +687,8 @@ def visualize_results(video_path, tracking_result, output_dir):
                         # 框颜色
                         if display_id in crossed_ids:
                             color = VISUALIZATION_PARAMS['crossed_track_color']  # 过线ID使用亮蓝色
-                        elif is_predicted:
-                            color = (0, 165, 255)  # 橙色，预测框
-                            cv2.putText(frame, "Pred", (x, y - 25),  # 添加Pred标签
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                         else:
-                            color = VISUALIZATION_PARAMS['track_color']  # 绿色，所有正常跟踪框
+                            color = VISUALIZATION_PARAMS['track_color']  # 绿色，所有框（包括预测框）
 
                         # 绘制边界框和ID 
                         cv2.rectangle(frame, (x, y), (x + w, y + h), color, VISUALIZATION_PARAMS['track_thickness'])

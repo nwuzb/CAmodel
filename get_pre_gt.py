@@ -58,37 +58,23 @@ from tools.generate_detections import create_box_encoder
 from ultralytics import YOLO
 
 # ================ 配置参数（可修改） ================
-# 新增：只需输入包含视频和gt.txt的文件夹路径
-FOLDER_PATH = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_2_clip_03_right_124"  # ✅带gt及其对应视频的文件夹
+# 输入输出文件路径
+VIDEO_PATH = "/Users/binzeng/MA/EvaluateVideos/2_clip_02_rightpart_48.mp4"  # 视频文件路径
+LABEL_SOURCE = "/Users/binzeng/MA/GT_videos/gt_60_5_clip_01_left_28/gt/labels.txt"  # 标签文件源路径
 
-# 自动查找视频和gt.txt文件
-VIDEO_PATH = None
-GT_PATH = None
-if os.path.isdir(FOLDER_PATH):
-    # 查找视频文件（支持常见格式）
-    video_exts = [".mp4"]
-    for fname in os.listdir(FOLDER_PATH):
-        if any(fname.lower().endswith(ext) for ext in video_exts):
-            VIDEO_PATH = os.path.join(FOLDER_PATH, fname)
-            break
-    # 查找gt.txt
-    gt_file = os.path.join(FOLDER_PATH, "gt.txt")
-    if os.path.isfile(gt_file):
-        GT_PATH = gt_file
-    # 错误处理
-    if VIDEO_PATH is None:
-        raise FileNotFoundError(f"未在文件夹 {FOLDER_PATH} 下找到视频文件（支持: {video_exts}）")
-    if GT_PATH is None:
-        raise FileNotFoundError(f"未在文件夹 {FOLDER_PATH} 下找到 gt.txt 文件")
-else:
-    raise NotADirectoryError(f"指定的 FOLDER_PATH 不是有效文件夹: {FOLDER_PATH}")
+# 自动生成输出路径
+VIDEO_NAME = os.path.splitext(os.path.basename(VIDEO_PATH))[0]  # 获取视频名称（不含扩展名）
+VIDEO_DIR = os.path.dirname(VIDEO_PATH)  # 获取视频所在目录
+OUTPUT_DIR = os.path.join(VIDEO_DIR, f"{VIDEO_NAME}_pregt")  # 输出主目录
+DETECTION_DIR = os.path.join(OUTPUT_DIR, "detection")  # 检测结果目录
+GT_DIR = os.path.join(OUTPUT_DIR, "gt")  # gt目录
+OUTPUT_GT = os.path.join(GT_DIR, "gt.txt")  # gt文件路径
+OUTPUT_LABEL = os.path.join(GT_DIR, "labels.txt")  # 标签文件路径，改为labels.txt
+OUTPUT_ZIP = os.path.join(OUTPUT_DIR, f"{VIDEO_NAME}_pretraingt.zip")  # 压缩文件路径
 
-# 输出目录自动命名
-OUTPUT_DIR = FOLDER_PATH + "-results2"  # 可根据需要自定义
-# 如果输出目录已存在则清空,不存在则创建 ❗️❗️❗️❗️❗️
-if os.path.exists(OUTPUT_DIR):
-    shutil.rmtree(OUTPUT_DIR)
-os.makedirs(OUTPUT_DIR)
+# 跟踪结果过滤参数
+MIN_TRACK_LEN = 3  # 最小跟踪长度（帧数）
+MIN_BOX_WIDTH = 15  # 最小框宽度
 
 # YOLO模型参数
 YOLO_PARAMS = {
@@ -103,20 +89,22 @@ YOLO_PARAMS = {
 TRACKING_PARAMS = { 
     'min_confidence': 0.5,         # 检测置信度阈值
     'nms_max_overlap': 0.5,        # 非极大值抑制阈值
-    'min_detection_height': 20,    # 最小检测框高度 💊 20不错
+    'min_detection_height': 20,    # 最小检测框高度
     'max_cosine_distance': 0.4,    # 特征匹配距离阈值
     'nn_budget': 60,               # 特征库大小
-    'max_age': 30,                 # 目标消失后保持跟踪的最大帧数（增大，允许更长时间的遮挡）💊
+    'max_age': 30,                 # 目标消失后保持跟踪的最大帧数
     'n_init': 1,                   # 确认为稳定跟踪目标所需的最小检测帧数
     'max_iou_distance': 0.95,      # 最大IoU距离
     'use_acceleration': True,      # 是否使用加速度卡尔曼滤波器
-    # 根据分析结果添加的参数
-    'std_weight_position': 1.0 / 10,    # 位置过程噪声权重 (降低，增加位置平滑度) 💊
-    'std_weight_velocity': 1.0 / 40,    # 速度过程噪声权重 (增大，降低速度敏感度) 💊
-    'std_weight_acceleration': 1.0 / 100, # 加速度过程噪声权重 (增大，降低加速度敏感度)💊
-    'velocity_smooth_factor': 0.8,      # 速度平滑因子 (增大，使速度变化更平滑)💊
-    'acceleration_smooth_factor': 0.6,  # 加速度平滑因子 (增大，使加速度变化更平滑)💊
+    'std_weight_position': 1.0 / 10,    # 位置过程噪声权重
+    'std_weight_velocity': 1.0 / 40,    # 速度过程噪声权重
+    'std_weight_acceleration': 1.0 / 100, # 加速度过程噪声权重
+    'velocity_smooth_factor': 0.8,      # 速度平滑因子
+    'acceleration_smooth_factor': 0.6,  # 加速度平滑因子
 }
+
+# 特征提取模型路径
+MODEL_PATH = "/Users/binzeng/MA/CAmodel/head_feature_encoder_best"
 
 # 可视化参数
 VISUALIZATION_PARAMS = {
@@ -129,8 +117,6 @@ VISUALIZATION_PARAMS = {
     'line_margin': 0.2,                # 计数线位置（相对于图像宽度的比例）
 }
 
-# 特征提取模型路径（如果为空，将使用默认的mars-small128.pb）
-MODEL_PATH = "/Users/binzeng/MA/CAmodel/head_feature_encoder_best"    # 特征提取器模型路径，为空时自动查找
 # ===================================================
 
 def load_yolo_model():
@@ -238,17 +224,68 @@ def generate_detections_with_yolo(sequence_dir, model):
     
     # 创建特征提取器
     try:
-        model_filename = MODEL_PATH
-        if not os.path.exists(model_filename):
-            print(f"指定的模型路径不存在: {model_filename}")
-            return None
+        # 如果未指定模型路径，尝试自动查找
+        if not MODEL_PATH:
+            # 根据freeze_model.py中的信息，查找可能的模型位置
+            possible_paths = [
+                # 相对于当前文件的路径
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
+                           "resources/networks/mars-small128.pb"),
+                # 相对于项目根目录的路径
+                "./deep_sort/resources/networks/mars-small128.pb",
+                "./resources/networks/mars-small128.pb",
+                "../resources/networks/mars-small128.pb",
+                # 绝对路径
+                "/Users/binzeng/MA/CAmodel/deep_sort/resources/networks/mars-small128.pb",
+                "/Users/binzeng/MA/CAmodel/resources/networks/mars-small128.pb",
+                "/Users/binzeng/MA/EvaluateVideos/mars-small128.pb"
+            ]
+            
+            # 遍历所有可能的路径
+            model_filename = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    model_filename = path
+                    break
+            
+            if model_filename is None:
+                print("警告: 无法找到特征提取模型文件，将使用简单的颜色直方图特征提取器")
+                raise FileNotFoundError("无法找到特征提取模型文件")
+        else:
+            model_filename = MODEL_PATH
+            if not os.path.exists(model_filename):
+                raise FileNotFoundError(f"指定的模型路径不存在: {model_filename}")
+        
         print(f"加载特征提取器模型: {model_filename}")
         encoder = create_box_encoder(model_filename, batch_size=32) # 创建特征提取器
         print(f"特征提取器已加载: {model_filename}")
     except Exception as e:
         print(f"创建特征提取器时出错: {e}")
-        print("无法加载特征提取模型，程序终止。")
-        return None
+        print("使用简单的颜色直方图特征提取器作为后备方案")
+        
+        # 创建一个简单的特征提取器（基于颜色直方图）作为后备
+        def simple_encoder(image, boxes):
+            features = []
+            for box in boxes:
+                x, y, w, h = map(int, box)
+                if x < 0 or y < 0 or w <= 0 or h <= 0 or x+w > image.shape[1] or y+h > image.shape[0]:
+                    features.append(np.zeros(512))
+                    continue
+                
+                roi = image[y:y+h, x:x+w]
+                if roi.size > 0:
+                    # 计算颜色直方图作为特征
+                    hist = cv2.calcHist([roi], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
+                    hist = cv2.normalize(hist, hist).flatten()
+                    # 将特征扩展到512维
+                    feature = np.zeros(512)
+                    feature[:min(len(hist), 512)] = hist[:min(len(hist), 512)]
+                    features.append(feature)
+                else:
+                    features.append(np.zeros(512))
+            return np.array(features)
+        
+        encoder = simple_encoder
     
     # 处理每一帧
     frame_indices = sorted(image_filenames.keys())
@@ -315,7 +352,7 @@ def run_tracking_evaluation(sequence_dir, detection_dir, params):
     sequence_name = os.path.basename(sequence_dir)
     
     # 创建结果目录
-    results_dir = os.path.join(params['output_dir'], "tracking_results")
+    results_dir = os.path.join(params['detection_dir'], "tracking_results")
     os.makedirs(results_dir, exist_ok=True)
     
     # 设置输出文件路径
@@ -759,13 +796,68 @@ def process_frame(model, frame):
         print(f"Error in process_frame: {str(e)}")
         return None
 
+def generate_pre_annotations(tracking_data, output_file, min_track_len=3, min_box_width=15):
+    """生成预标注文件
+    
+    Args:
+        tracking_data: 跟踪结果数据，MOT格式 (frame,id,x,y,w,h,...)
+        output_file: 输出文件路径
+        min_track_len: 最小跟踪长度（帧数）
+        min_box_width: 最小框宽度
+    """
+    # 过滤短轨迹
+    filtered_data = filter_short_tracks(tracking_data, min_length=min_track_len)
+    
+    if filtered_data is None or len(filtered_data) == 0:
+        print("警告: 过滤后没有跟踪结果")
+        return
+    
+    # 过滤小框
+    mask = filtered_data[:, 4] >= min_box_width  # 第4列是宽度w
+    filtered_data = filtered_data[mask]
+    
+    if len(filtered_data) == 0:
+        print("警告: 过滤小框后没有跟踪结果")
+        return
+    
+    # 准备输出数据
+    output_data = []
+    for row in filtered_data:
+        frame_id = int(row[0])
+        track_id = int(row[1])
+        x, y, w, h = map(float, row[2:6])  # 确保是浮点数
+        
+        # MOT格式：frame,id,x,y,w,h,1,1,1.0
+        output_row = [frame_id, track_id, x, y, w, h, 1, 1, 1.0]
+        output_data.append(output_row)
+    
+    # 按帧号和ID排序
+    output_data.sort(key=lambda x: (x[0], x[1]))
+    
+    # 保存到文件
+    try:
+        with open(output_file, 'w') as f:
+            for row in output_data:
+                line = ','.join(map(str, row))
+                f.write(line + '\n')
+        print(f"预标注文件已保存到: {output_file}")
+        print(f"共生成 {len(output_data)} 个标注框")
+    except Exception as e:
+        print(f"保存预标注文件时出错: {e}")
+
 def main():
     """主函数"""
     # 将配置参数打包为字典
     params = {
         'video_path': VIDEO_PATH,
-        'gt_path': GT_PATH,
         'output_dir': OUTPUT_DIR,
+        'detection_dir': DETECTION_DIR,
+        'gt_dir': GT_DIR,
+        'output_gt': OUTPUT_GT,
+        'output_label': OUTPUT_LABEL,
+        'output_zip': OUTPUT_ZIP,
+        'min_track_len': MIN_TRACK_LEN,
+        'min_box_width': MIN_BOX_WIDTH,
         'model_path': MODEL_PATH,
         'min_confidence': TRACKING_PARAMS['min_confidence'],
         'nms_max_overlap': TRACKING_PARAMS['nms_max_overlap'],
@@ -776,7 +868,6 @@ def main():
         'max_age': TRACKING_PARAMS['max_age'],
         'n_init': TRACKING_PARAMS['n_init'],
         'max_iou_distance': TRACKING_PARAMS['max_iou_distance'],
-        # 添加运动模型参数
         'std_weight_position': TRACKING_PARAMS['std_weight_position'],
         'std_weight_velocity': TRACKING_PARAMS['std_weight_velocity'],
         'std_weight_acceleration': TRACKING_PARAMS['std_weight_acceleration'],
@@ -787,10 +878,15 @@ def main():
     # 初始化日志记录器
     logger = init_logger(OUTPUT_DIR)
     
-    print("=== MOT性能评估 ===")
+    print("=== 生成预标注文件 ===")
     print(f"视频路径: {params['video_path']}")
-    print(f"GT文件路径: {params['gt_path']}")
     print(f"输出目录: {params['output_dir']}")
+    print(f"检测结果目录: {params['detection_dir']}")
+    print(f"GT目录: {params['gt_dir']}")
+    
+    print("\n=== 跟踪结果过滤参数 ===")
+    print(f"最小跟踪长度: {params['min_track_len']}")
+    print(f"最小框宽度: {params['min_box_width']}")
     
     print("\n=== YOLO参数 ===")
     print(f"模型路径: {YOLO_PARAMS['model_path']}")
@@ -810,31 +906,72 @@ def main():
     print(f"最大IoU距离: {params['max_iou_distance']}")
     print(f"使用加速度模型: {params['use_acceleration']}")
     
-    # 打印运动模型参数
-    print("\n=== 运动模型参数 ===")
-    print(f"位置过程噪声权重: {params['std_weight_position']}")
-    print(f"速度过程噪声权重: {params['std_weight_velocity']}")
-    print(f"加速度过程噪声权重: {params['std_weight_acceleration']}")
-    print(f"速度平滑因子: {params['velocity_smooth_factor']}")
-    print(f"加速度平滑因子: {params['acceleration_smooth_factor']}")
-    
-    # 设置输出目录
-    os.makedirs(params['output_dir'], exist_ok=True)
-    
     try:
-        # 第1步: 准备MOT格式数据
-        print("\n步骤1: 准备MOT格式数据...")
-        sequence_dir = prepare_sequence_dir(params['video_path'], params['gt_path'], params['output_dir'])
-        if not sequence_dir:
-            print("错误: 无法准备MOT格式数据")
-            return
+        # 清理并创建目录结构
+        if os.path.exists(OUTPUT_DIR):
+            print(f"\n清空输出目录: {OUTPUT_DIR}")
+            shutil.rmtree(OUTPUT_DIR)
         
-        # 第2步: 加载YOLO模型
-        print("\n步骤2: 加载YOLO模型...")
+        print(f"创建目录结构...")
+        os.makedirs(DETECTION_DIR)
+        os.makedirs(GT_DIR)
+        
+        # 复制标签文件
+        print(f"复制标签文件...")
+        shutil.copy2(LABEL_SOURCE, OUTPUT_LABEL)
+        
+        # 第1步: 加载YOLO模型
+        print("\n步骤1: 加载YOLO模型...")
         yolo_model = load_yolo_model()
         if yolo_model is None:
             print("错误: 无法加载YOLO模型")
             return
+        
+        # 第2步: 从视频中提取帧
+        print("\n步骤2: 从视频中提取帧...")
+        cap = cv2.VideoCapture(VIDEO_PATH)
+        if not cap.isOpened():
+            print("错误: 无法打开视频")
+            return
+            
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        
+        # 创建临时序列目录
+        sequence_dir = os.path.join(DETECTION_DIR, "sequence")
+        img_dir = os.path.join(sequence_dir, "img1")
+        os.makedirs(img_dir, exist_ok=True)
+        
+        # 创建seqinfo.ini文件
+        with open(os.path.join(sequence_dir, "seqinfo.ini"), "w") as f:
+            f.write("[Sequence]\n")
+            f.write(f"name=sequence\n")
+            f.write(f"imDir=img1\n")
+            f.write(f"frameRate={fps}\n")
+            f.write(f"seqLength={total_frames}\n")
+            f.write(f"imWidth={width}\n")
+            f.write(f"imHeight={height}\n")
+            f.write(f"imExt=.jpg\n")
+        
+        # 提取帧
+        frame_count = 0
+        progress_bar = tqdm(total=total_frames, desc="提取视频帧")
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            frame_count += 1
+            frame_path = os.path.join(img_dir, f"{frame_count:06d}.jpg")
+            cv2.imwrite(frame_path, frame)
+            progress_bar.update(1)
+        
+        progress_bar.close()
+        cap.release()
+        print(f"共提取 {frame_count} 帧")
         
         # 第3步: 使用YOLO生成检测结果
         print("\n步骤3: 使用YOLO生成检测结果...")
@@ -843,26 +980,29 @@ def main():
             print("错误: 无法生成检测结果")
             return
         
-        # 第4步: 运行跟踪评估
-        print("\n步骤4: 运行跟踪评估...")
+        # 第4步: 运行跟踪
+        print("\n步骤4: 运行跟踪...")
         tracking_result = run_tracking_evaluation(sequence_dir, detection_dir, params)
         if not tracking_result:
-            print("错误: 无法运行跟踪评估")
+            print("错误: 无法运行跟踪")
             return
         
-        # 第5步: 计算MOT指标
-        print("\n步骤5: 计算MOT指标...")
-        metrics = compute_mot_metrics(params['gt_path'], tracking_result)
-        if metrics is None:
-            print("错误: 无法计算MOT指标")
+        # 第5步: 生成预标注文件
+        print("\n步骤5: 生成预标注文件...")
+        tracking_data = np.loadtxt(tracking_result, delimiter=',')
+        generate_pre_annotations(tracking_data, OUTPUT_GT, 
+                               min_track_len=MIN_TRACK_LEN,
+                               min_box_width=MIN_BOX_WIDTH)
         
-        # 第6步: 可视化结果
-        print("\n步骤6: 可视化结果...")
-        visualize_results(params['video_path'], tracking_result, params['output_dir'])
+        # 第6步: 压缩gt文件夹
+        print("\n步骤6: 压缩gt文件夹...")
+        if os.path.exists(OUTPUT_ZIP):
+            os.remove(OUTPUT_ZIP)
+        shutil.make_archive(os.path.splitext(OUTPUT_ZIP)[0], 'zip', OUTPUT_DIR, 'gt')
         
-        print("\n=== 评估完成 ===")
-        print(f"所有结果已保存到: {params['output_dir']}")
-        print(f"日志文件保存在: /Users/binzeng/MA/GT_videos/评估追踪器性能yolo_run_log.txt")
+        print("\n=== 完成 ===")
+        print(f"预标注文件已保存到: {OUTPUT_GT}")
+        print(f"压缩文件已保存到: {OUTPUT_ZIP}")
         
     except Exception as e:
         print(f"运行过程中发生错误: {e}")
@@ -874,7 +1014,5 @@ def main():
             sys.stdout.close()
             sys.stdout = sys.stdout.terminal
 
-# =============== 主程序执行 =============== 
 if __name__ == "__main__":
-    # 运行MOT性能评估
     main() 
