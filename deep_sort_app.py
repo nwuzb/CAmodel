@@ -130,7 +130,8 @@ def run(sequence_dir, detection_file, output_file, min_confidence,
         nms_max_overlap, min_detection_height, max_cosine_distance,
         nn_budget, display, use_acceleration=False, max_age=30, n_init=3, max_iou_distance=0.7,
         std_weight_position=1.0/20, std_weight_velocity=1.0/160, std_weight_acceleration=1.0/10,
-        velocity_smooth_factor=0.85, acceleration_smooth_factor=0.7):
+        velocity_smooth_factor=0.85, acceleration_smooth_factor=0.7,
+        debug_video_path=None):
     """Run multi-target tracker on a particular sequence.
 
     Parameters
@@ -175,6 +176,8 @@ def run(sequence_dir, detection_file, output_file, min_confidence,
         速度平滑因子
     acceleration_smooth_factor : float
         加速度平滑因子
+    debug_video_path : str
+        Path to save debug video. If None, no video is saved.
     """
     seq_info = gather_sequence_info(sequence_dir, detection_file)
     metric = nn_matching.NearestNeighborDistanceMetric(
@@ -208,12 +211,18 @@ def run(sequence_dir, detection_file, output_file, min_confidence,
                 tracker.kf._velocity_smooth_factor = velocity_smooth_factor
                 tracker.kf._acceleration_smooth_factor = acceleration_smooth_factor
                 
-            print(f"已配置卡尔曼滤波器参数:")
-            print(f"  位置噪声权重: {tracker.kf._std_weight_position}")
-            print(f"  速度噪声权重: {tracker.kf._std_weight_velocity}")
-            print(f"  加速度噪声权重: {tracker.kf._std_weight_acceleration}")
-            print(f"  速度平滑因子: {tracker.kf._velocity_smooth_factor if hasattr(tracker.kf, '_velocity_smooth_factor') else 'N/A'}")
-            print(f"  加速度平滑因子: {tracker.kf._acceleration_smooth_factor if hasattr(tracker.kf, '_acceleration_smooth_factor') else 'N/A'}")
+            # print(f"已配置卡尔曼滤波器参数:")
+            # print(f"  位置噪声权重: {tracker.kf._std_weight_position}")
+            # print(f"  速度噪声权重: {tracker.kf._std_weight_velocity}")
+            # print(f"  加速度噪声权重: {tracker.kf._std_weight_acceleration}")
+            # print(f"  速度平滑因子: {tracker.kf._velocity_smooth_factor if hasattr(tracker.kf, '_velocity_smooth_factor') else 'N/A'}")
+            # print(f"  加速度平滑因子: {tracker.kf._acceleration_smooth_factor if hasattr(tracker.kf, '_acceleration_smooth_factor') else 'N/A'}")
+
+        # 如果外部通过 kwargs 传入了方向 gating 相关配置，则覆写
+        tracker.lateral_threshold = globals().get('DIRECTION_LATERAL_THRESHOLD', tracker.lateral_threshold)
+        tracker.backward_tol = globals().get('DIRECTION_BACKWARD_TOL', tracker.backward_tol)
+        tracker.direction_min_age = globals().get('DIRECTION_MIN_AGE', tracker.direction_min_age)
+        tracker.debug_direction = globals().get('DEBUG_DIRECTION', tracker.debug_direction)
     else:
         # 创建普通跟踪器
         tracker = Tracker(metric, max_iou_distance=max_iou_distance, max_age=max_age, n_init=n_init)
@@ -221,7 +230,7 @@ def run(sequence_dir, detection_file, output_file, min_confidence,
     results = []
 
     def frame_callback(vis, frame_idx):
-        if frame_idx % 200 == 0: # 每200帧打印一次
+        if frame_idx % 250 == 0: # 每200帧打印一次
             print("Processing frame %05d" % frame_idx)
 
         # Load image and generate detections.
@@ -241,7 +250,7 @@ def run(sequence_dir, detection_file, output_file, min_confidence,
         tracker.update(detections)
 
         # Update visualization.
-        if display:
+        if display or debug_video_path is not None:
             image = cv2.imread(
                 seq_info["image_filenames"][frame_idx], cv2.IMREAD_COLOR)
             vis.set_image(image.copy())
@@ -259,8 +268,20 @@ def run(sequence_dir, detection_file, output_file, min_confidence,
     # Run tracker.
     if display:
         visualizer = visualization.Visualization(seq_info, update_ms=5)
+        # 如需保存调试视频
+        if debug_video_path is not None:
+            # 将窗口形状调整为原始分辨率，确保保存视频分辨率一致
+            import numpy as _np
+            orig_shape = seq_info["image_size"][::-1]  # (width,height)
+            visualizer.viewer._window_shape = orig_shape
+            visualizer.viewer.image = _np.zeros(orig_shape + (3,), dtype=_np.uint8)
+            visualizer.viewer.enable_videowriter(debug_video_path, fourcc_string="mp4v", fps=2)
     else:
-        visualizer = visualization.NoVisualization(seq_info)
+        # 即使不显示窗口，如果需要保存debug视频，也要创建带视频保存功能的可视化器
+        if debug_video_path is not None:
+            visualizer = visualization.VideoOnlyVisualization(seq_info, debug_video_path)
+        else:
+            visualizer = visualization.NoVisualization(seq_info)
     visualizer.run(frame_callback)
 
     # Store results.
@@ -268,6 +289,13 @@ def run(sequence_dir, detection_file, output_file, min_confidence,
     for row in results:
         print('%d,%d,%.2f,%.2f,%.2f,%.2f,1,-1,-1,-1' % (
             row[0], row[1], row[2], row[3], row[4], row[5]),file=f)
+
+    # 关闭 videowriter
+    if debug_video_path is not None:
+        if hasattr(visualizer, 'viewer') and visualizer.viewer is not None:
+            visualizer.viewer.disable_videowriter()
+        elif hasattr(visualizer, 'close_video'):
+            visualizer.close_video()
 
 
 def bool_string(input_string):
@@ -337,6 +365,9 @@ def parse_args():
     parser.add_argument(
         "--acceleration_smooth_factor", help="加速度平滑因子",
         default=0.7, type=float)
+    parser.add_argument(
+        "--debug_video_path", help="Path to save debug video",
+        default=None, type=str)
     return parser.parse_args()
 
 
@@ -348,4 +379,5 @@ if __name__ == "__main__":
         args.max_cosine_distance, args.nn_budget, args.display, args.use_acceleration,
         args.max_age, args.n_init, args.max_iou_distance,
         args.std_weight_position, args.std_weight_velocity, args.std_weight_acceleration,
-        args.velocity_smooth_factor, args.acceleration_smooth_factor)
+        args.velocity_smooth_factor, args.acceleration_smooth_factor,
+        args.debug_video_path)

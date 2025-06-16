@@ -125,7 +125,7 @@ class SavedModelEncoder(object):
         self.feature_dim = dummy_output[output_key].shape[-1]
         self.image_shape = [128, 64, 3]  # 默认图像形状
         
-        print(f"加载SavedModel成功。输入签名: {self.input_tensor_name}, 特征维度: {self.feature_dim}")
+        # print(f"加载SavedModel成功。输入签名: {self.input_tensor_name}, 特征维度: {self.feature_dim}")
         
     def __call__(self, data_x, batch_size=32):
         # 数据预处理: 确保数据是浮点数且在[0,1]范围内
@@ -165,20 +165,20 @@ def create_box_encoder(model_filename, input_name="images",
     """
     # 判断是文件还是目录，以确定模型类型
     if os.path.isdir(model_filename):
-        print(f"检测到SavedModel目录: {model_filename}")
+        # print(f"检测到SavedModel目录: {model_filename}")
         try:
             # 使用SavedModel加载器
             image_encoder = SavedModelEncoder(model_filename, input_name, output_name)
-            print(f"成功加载SavedModel: {model_filename}")
+            # print(f"成功加载SavedModel: {model_filename}")
         except Exception as e:
             print(f"加载SavedModel失败: {e}")
             raise
     else:
         # 使用原始的冻结图模型加载器
-        print(f"加载冻结图模型文件: {model_filename}")
+        # print(f"加载冻结图模型文件: {model_filename}")
         try:
             image_encoder = ImageEncoder(model_filename, input_name, output_name)
-            print(f"成功加载冻结图模型: {model_filename}")
+            # print(f"成功加载冻结图模型: {model_filename}")
         except Exception as e:
             print(f"加载冻结图模型失败: {e}")
             raise

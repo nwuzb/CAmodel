@@ -1,5 +1,7 @@
 # vim: expandtab:ts=4:sw=4
 
+import numpy as np
+
 
 class TrackState:
     """
@@ -80,6 +82,10 @@ class Track:
         self._n_init = n_init
         self._max_age = max_age
 
+        # 新增: 用于方向约束的属性
+        self.last_center = self.mean[:2].copy()  # 上一次中心点位置
+        self.direction = None  # 单位方向向量
+
     def to_tlwh(self):
         """Get current position in bounding box format `(top left x, top left y,
         width, height)`.
@@ -143,6 +149,22 @@ class Track:
         self.time_since_update = 0
         if self.state == TrackState.Tentative and self.hits >= self._n_init:
             self.state = TrackState.Confirmed
+
+        # 计算新的中心并根据位移更新方向
+        current_center = self.mean[:2].copy()
+        move_vec = current_center - self.last_center
+        move_dist = np.linalg.norm(move_vec)
+        if move_dist > 1: #只要物体真有移动，中心点至少会变化好几个像素，这里假设移动距离小于1像素的物体是静止的
+            move_unit = move_vec / move_dist
+            if self.direction is None:
+                self.direction = move_unit
+            else:
+                # 使用 EMA 平滑方向
+                alpha = 0.8
+                self.direction = alpha * self.direction + (1 - alpha) * move_unit
+                self.direction /= np.linalg.norm(self.direction)  # 重新归一化
+        # 更新最近中心点
+        self.last_center = current_center
 
     def mark_missed(self):
         """Mark this track as missed (no association at the current time step).

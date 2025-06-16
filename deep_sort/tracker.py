@@ -6,6 +6,67 @@ from . import linear_assignment
 from . import iou_matching
 from .track import Track, TrackState
 
+# ====================== 方向约束公共工具 ======================
+# 默认参数
+DEFAULT_LATERAL_THRESHOLD = 25  # 像素，只要中心点落入"前方且横向 ≤ δpx" 就视为候选；否则整框直接屏蔽。中心点允许活动的带状区域
+DEFAULT_BACKWARD_TOLERANCE = 5 # 允许轻微负向位移
+DEFAULT_DIRECTION_MIN_AGE = 2   # 轨迹命中帧数达到该值后才启用方向 gating
+
+def apply_direction_gating(cost_matrix,
+                           tracks,
+                           detections,
+                           track_indices,
+                           detection_indices,
+                           lateral_threshold=DEFAULT_LATERAL_THRESHOLD,
+                           backward_tol=DEFAULT_BACKWARD_TOLERANCE,
+                           min_age=DEFAULT_DIRECTION_MIN_AGE,
+                           debug=True):
+    """根据轨迹方向向量，对代价矩阵进行 gating。
+
+    Args:
+        cost_matrix: numpy.ndarray, shape (N_tracks, N_dets)
+        tracks: list[Track]
+        detections: list[Detection]
+        track_indices: list[int]
+        detection_indices: list[int]
+        lateral_threshold: 允许横向(垂直于运动方向)最大距离(px)
+        backward_tol: 允许向后运动的容忍(px)
+        min_age: 轨迹至少命中多少帧后开始启用方向 gating
+        debug: bool, 打开后打印信息
+    """
+    for row, t_idx in enumerate(track_indices):
+        track = tracks[t_idx]
+
+        # 条件1: 已确认且命中帧数足够
+        if not track.is_confirmed() or track.hits < min_age:
+            continue
+
+        dir_vec = getattr(track, 'direction', None)
+        if dir_vec is None or np.linalg.norm(dir_vec) < 1e-3:
+            continue
+
+        dir_vec = dir_vec / np.linalg.norm(dir_vec)
+        track_center = track.mean[:2]
+
+        for col, d_idx in enumerate(detection_indices):
+            det_center = detections[d_idx].to_xyah()[:2]
+            vec = det_center - track_center
+
+            forward_proj = np.dot(vec, dir_vec)
+            if forward_proj < -backward_tol:
+                if debug:
+                    print(f"Track {track.track_id}: det {d_idx} 在反方向, 过滤")
+                cost_matrix[row, col] = linear_assignment.INFTY_COST
+                continue
+
+            # 横向距离
+            lateral_vec = vec - forward_proj * dir_vec
+            if np.linalg.norm(lateral_vec) > lateral_threshold:
+                if debug:
+                    print(f"Track {track.track_id}: det {d_idx} 横向距离过大, 过滤")
+                cost_matrix[row, col] = linear_assignment.INFTY_COST
+
+    return cost_matrix
 
 class Tracker:
     """
@@ -48,6 +109,12 @@ class Tracker:
         self.kf = kalman_filter.KalmanFilter()
         self.tracks = []
         self._next_id = 1
+
+        # 方向 gating 相关参数，可按需覆盖
+        self.lateral_threshold = DEFAULT_LATERAL_THRESHOLD
+        self.backward_tol = DEFAULT_BACKWARD_TOLERANCE
+        self.direction_min_age = DEFAULT_DIRECTION_MIN_AGE
+        self.debug_direction = True  # 打印调试信息
 
     def predict(self):
         """Propagate track state distributions one time step forward.
@@ -102,6 +169,19 @@ class Tracker:
                 self.kf, cost_matrix, tracks, dets, track_indices,
                 detection_indices)
 
+            # 方向 gating
+            cost_matrix = apply_direction_gating(
+                cost_matrix,
+                tracks,
+                dets,
+                track_indices,
+                detection_indices,
+                lateral_threshold=self.lateral_threshold,
+                backward_tol=self.backward_tol,
+                min_age=self.direction_min_age,
+                debug=self.debug_direction
+            )
+
             return cost_matrix
 
         # Split track set into confirmed and unconfirmed tracks.
@@ -155,6 +235,8 @@ class Tracker:
         self.tracks.append(Track(
             mean, covariance, self._next_id, self.n_init, max_age,
             detection.feature))
+        # 传递方向 ROI 配置至 Track
+        self.tracks[-1].lateral_threshold = self.lateral_threshold
         self._next_id += 1
 
 
@@ -187,7 +269,7 @@ class AccelerationTracker(Tracker):
         The list of active tracks at the current time step.
     """
 
-    def __init__(self, metric, max_iou_distance=0.7, max_age=30, n_init=3, frame_size=(1536, 864)):
+    def __init__(self, metric, max_iou_distance=0.7, max_age=30, n_init=2, frame_size=(1536, 864)):
         """Initialize tracker with a custom Kalman filter that includes acceleration."""
         # 不直接调用父类的__init__方法，而是复制其内容并修改
         self.metric = metric
@@ -217,6 +299,12 @@ class AccelerationTracker(Tracker):
         # 轨迹消失状态跟踪 - 更快速地处理离开画面的轨迹
         self.disappearing_tracks = {}  # 轨迹ID -> 消失计数
         self.max_disappear_count = 3  # 消失多次后降低max_age
+
+        # 方向 gating 参数
+        self.lateral_threshold = DEFAULT_LATERAL_THRESHOLD
+        self.backward_tol = DEFAULT_BACKWARD_TOLERANCE
+        self.direction_min_age = DEFAULT_DIRECTION_MIN_AGE
+        self.debug_direction = False
 
     def predict(self):
         """Propagate track state distributions one time step forward.
@@ -320,6 +408,19 @@ class AccelerationTracker(Tracker):
                 self.kf, cost_matrix, tracks, dets, track_indices,
                 detection_indices)
 
+            # 方向 gating
+            cost_matrix = apply_direction_gating(
+                cost_matrix,
+                tracks,
+                dets,
+                track_indices,
+                detection_indices,
+                lateral_threshold=self.lateral_threshold,
+                backward_tol=self.backward_tol,
+                min_age=self.direction_min_age,
+                debug=self.debug_direction
+            )
+
             return cost_matrix
 
         # Split track set into confirmed and unconfirmed tracks.
@@ -373,4 +474,5 @@ class AccelerationTracker(Tracker):
         self.tracks.append(Track(
             mean, covariance, self._next_id, self.n_init, max_age,
             detection.feature))
+        self.tracks[-1].lateral_threshold = self.lateral_threshold
         self._next_id += 1
