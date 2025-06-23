@@ -15,8 +15,28 @@ import json
 import sys
 import time
 import datetime
+import glob
+import csv
+import re
 
 # 添加日志记录功能
+class BatchTeeLogger:
+    """同时将输出写入到控制台和文件（批处理版本）"""
+    def __init__(self, log_file):
+        self.terminal = sys.stdout
+        self.log_file = open(log_file, 'a', encoding='utf-8')
+        
+    def write(self, message):
+        self.terminal.write(message)
+        self.log_file.write(message)
+        
+    def flush(self):
+        self.terminal.flush()
+        self.log_file.flush()
+        
+    def close(self):
+        self.log_file.close()
+
 class TeeLogger:
     """同时将输出写入到控制台和文件"""
     def __init__(self, log_file):
@@ -45,7 +65,15 @@ class TeeLogger:
     def close(self):
         self.log_file.close()
 
-# 初始化日志记录器 
+# 初始化批处理日志记录器
+def init_batch_logger(parent_dir):
+    parent_name = os.path.basename(parent_dir)
+    log_file = os.path.join(parent_dir, f"{parent_name}_批量处理日志.txt")
+    batch_logger = BatchTeeLogger(log_file)
+    sys.stdout = batch_logger
+    return batch_logger
+
+# 初始化单个任务日志记录器 
 def init_logger(output_dir):
     log_file = os.path.join(output_dir, "terminallog.txt")
     sys.stdout = TeeLogger(log_file)
@@ -59,37 +87,8 @@ from tools.generate_detections import create_box_encoder
 from ultralytics import YOLO
 
 # ================ 配置参数（可修改） ================
-# 新增：只需输入包含视频和gt.txt的文件夹路径
-FOLDER_PATH = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_10_clip_07_47_46middle_93"  # ✅带gt及其对应视频的文件夹
-
-# 自动查找视频和gt.txt文件
-VIDEO_PATH = None
-GT_PATH = None
-if os.path.isdir(FOLDER_PATH):
-    # 查找视频文件（支持常见格式）
-    video_exts = [".mp4"]
-    for fname in os.listdir(FOLDER_PATH):
-        if any(fname.lower().endswith(ext) for ext in video_exts):
-            VIDEO_PATH = os.path.join(FOLDER_PATH, fname)
-            break
-    # 查找gt.txt
-    gt_file = os.path.join(FOLDER_PATH, "gt.txt")
-    if os.path.isfile(gt_file):
-        GT_PATH = gt_file
-    # 错误处理
-    if VIDEO_PATH is None:
-        raise FileNotFoundError(f"未在文件夹 {FOLDER_PATH} 下找到视频文件（支持: {video_exts}）")
-    if GT_PATH is None:
-        raise FileNotFoundError(f"未在文件夹 {FOLDER_PATH} 下找到 gt.txt 文件")
-else:
-    raise NotADirectoryError(f"指定的 FOLDER_PATH 不是有效文件夹: {FOLDER_PATH}")
-
-# 输出目录自动命名
-OUTPUT_DIR = FOLDER_PATH + "-results边界参与匹配"  # 可根据需要自定义 ✅
-# 如果输出目录已存在则清空,不存在则创建 ❗️❗️❗️❗️❗️
-if os.path.exists(OUTPUT_DIR):
-    shutil.rmtree(OUTPUT_DIR)
-os.makedirs(OUTPUT_DIR)
+# 批处理：输入包含多个子文件夹的父目录路径
+PARENT_FOLDER_PATH = "/Users/binzeng/MA/GT_videos/高质量评估视频gt_60_videos"  # ✅包含多个带gt及视频的子文件夹的父目录
 
 # YOLO模型参数
 YOLO_PARAMS = {
@@ -107,7 +106,7 @@ YOLO_PARAMS = {
 TRACKING_PARAMS = { 
     'min_confidence': 0.5,         # 检测置信度阈值
     'nms_max_overlap': 0.5,        # 非极大值抑制阈值
-    'min_detection_height': 15,    # 最小检测框高度 💊 20不错，但有小于15的值
+    'min_detection_height': 15,    # 最小检测框高度 💊 20不错
     'max_cosine_distance': 0.4,    # 特征匹配距离阈值
     'nn_budget': 60,               # 特征库大小
     'max_age': 30,                 # 目标消失后保持跟踪的最大帧数（增大，允许更长时间的遮挡）💊
@@ -137,8 +136,7 @@ VISUALIZATION_PARAMS = {
 }
 
 # 特征提取模型路径（如果为空，将使用默认的mars-small128.pb，但是默认的不存在）
-# MODEL_PATH = "/Users/binzeng/MA/CAmodel/head_feature_encoder_best"    # 特征提取器模型路径，为空时自动查找
-MODEL_PATH = "/Users/binzeng/MA/CAmodel/head_feature_encoder_colab_best"    # 特征提取器模型路径，为空时自动查找
+MODEL_PATH = "/Users/binzeng/MA/CAmodel/head_feature_encoder_best"    # 特征提取器模型路径，为空时自动查找
 # ===================================================
 
 def load_yolo_model():
@@ -633,23 +631,14 @@ def visualize_results(video_path, tracking_result, output_dir):
                             try:
                                 x, y, w, h = map(int, det[2:6])
                                 
-                                # 修改YOLO检测框边界检查：允许靠近边界的框显示
+                                # 添加安全检查，确保x、y、w、h是有效的坐标值
                                 if (np.isnan(x) or np.isnan(y) or np.isnan(w) or np.isnan(h) or 
-                                    w <= 0 or h <= 0):
-                                    # 跳过数值无效的边界框
+                                    w <= 0 or h <= 0 or x < 0 or y < 0 or 
+                                    x + w >= width or y + h >= height):
+                                    # 跳过无效的边界框
                                     continue
                                     
-                                # 只跳过完全在图像外的框
-                                if (x + w <= 0 or x >= width or y + h <= 0 or y >= height):
-                                    continue
-                                
-                                # 裁剪到图像边界内进行绘制
-                                x_clipped = max(0, x)
-                                y_clipped = max(0, y)
-                                x2_clipped = min(width - 1, x + w)
-                                y2_clipped = min(height - 1, y + h)
-                                
-                                cv2.rectangle(frame, (x_clipped, y_clipped), (x2_clipped, y2_clipped), (0, 0, 255), 2)  # 红色
+                                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)  # 红色
                             except Exception as e:
                                 print(f"绘制YOLO检测框时出错: {e}")
                                 continue
@@ -661,37 +650,15 @@ def visualize_results(video_path, tracking_result, output_dir):
                         original_id = int(row[1])
                         x, y, w, h = map(int, row[2:6])
                         
-                        # 修改边界检查逻辑：允许靠近边界的框显示，只跳过完全无效的框
-                        # 1. 基本有效性检查
+                        # 添加安全检查，确保x、y、w、h是有效的坐标值和合理范围内
                         if (np.isnan(x) or np.isnan(y) or np.isnan(w) or np.isnan(h) or 
-                            w <= 0 or h <= 0):
-                            # 跳过数值无效的边界框
+                            w <= 0 or h <= 0 or x < 0 or y < 0 or 
+                            x + w >= width or y + h >= height):
+                            # 跳过无效的边界框
                             continue
                             
-                        # 2. 完全超出边界的框才跳过
-                        if (x + w <= 0 or x >= width or y + h <= 0 or y >= height):
-                            # 跳过完全在图像外的边界框
-                            continue
-                            
-                        # 3. 对部分超出边界的框进行裁剪显示
-                        # 保存原始坐标用于中心点计算
-                        original_x, original_y = x, y
-                        original_w, original_h = w, h
-                        
-                        # 裁剪到图像边界内
-                        x_clipped = max(0, x)
-                        y_clipped = max(0, y)
-                        x2_clipped = min(width - 1, x + w)
-                        y2_clipped = min(height - 1, y + h)
-                        w_clipped = x2_clipped - x_clipped
-                        h_clipped = y2_clipped - y_clipped
-                        
-                        # 使用裁剪后的坐标进行绘制
-                        x, y, w, h = x_clipped, y_clipped, w_clipped, h_clipped
-                        
-                        # 使用原始坐标计算中心点（用于计数逻辑）
-                        center_x = original_x + original_w // 2
-                        center_y = original_y + original_h // 2
+                        center_x = x + w // 2
+                        center_y = y + h // 2
 
                         # ==== 区域持续帧计数逻辑 ====
                         # 左带
@@ -822,13 +789,57 @@ def process_frame(model, frame):
         print(f"Error in process_frame: {str(e)}")
         return None
 
-def main():
-    """主函数"""
+def find_video_and_gt(folder_path):
+    """在文件夹中查找视频和gt.txt文件"""
+    video_path = None
+    gt_path = None
+    
+    if not os.path.isdir(folder_path):
+        return None, None
+        
+    # 查找视频文件（支持常见格式）
+    video_exts = [".mp4", ".avi", ".mov", ".mkv"]
+    for fname in os.listdir(folder_path):
+        if any(fname.lower().endswith(ext) for ext in video_exts):
+            video_path = os.path.join(folder_path, fname)
+            break
+    
+    # 查找gt.txt
+    gt_file = os.path.join(folder_path, "gt.txt")
+    if os.path.isfile(gt_file):
+        gt_path = gt_file
+        
+    return video_path, gt_path
+
+def process_single_folder(folder_path, output_parent_dir):
+    """处理单个文件夹"""
+    print(f"\n正在处理文件夹: {folder_path}")
+    
+    # 查找视频和GT文件
+    video_path, gt_path = find_video_and_gt(folder_path)
+    
+    if video_path is None:
+        print(f"跳过文件夹 {folder_path}: 未找到视频文件")
+        return False
+        
+    if gt_path is None:
+        print(f"跳过文件夹 {folder_path}: 未找到 gt.txt 文件")
+        return False
+    
+    # 生成输出目录名
+    folder_name = os.path.basename(folder_path)
+    output_dir = os.path.join(output_parent_dir, folder_name + "-Results")
+    
+    # 如果输出目录已存在则清空,不存在则创建
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(output_dir)
+    
     # 将配置参数打包为字典
     params = {
-        'video_path': VIDEO_PATH,
-        'gt_path': GT_PATH,
-        'output_dir': OUTPUT_DIR,
+        'video_path': video_path,
+        'gt_path': gt_path,
+        'output_dir': output_dir,
         'model_path': MODEL_PATH,
         'min_confidence': TRACKING_PARAMS['min_confidence'],
         'nms_max_overlap': TRACKING_PARAMS['nms_max_overlap'],
@@ -849,12 +860,7 @@ def main():
     }
     
     # 初始化日志记录器
-    logger = init_logger(OUTPUT_DIR)
-    
-    # print("=== MOT性能评估 ===")
-    # print(f"视频路径: {params['video_path']}")
-    # print(f"GT文件路径: {params['gt_path']}")
-    # print(f"输出目录: {params['output_dir']}")
+    logger = init_logger(params['output_dir'])
     
     # 创建表格数据
     table_data = []
@@ -956,21 +962,21 @@ def main():
         sequence_dir = prepare_sequence_dir(params['video_path'], params['gt_path'], params['output_dir'])
         if not sequence_dir:
             print("错误: 无法准备MOT格式数据")
-            return
+            return False
         
         # 第2步: 加载YOLO模型
         print("\n步骤2: 加载YOLO模型...")
         yolo_model = load_yolo_model()
         if yolo_model is None:
             print("错误: 无法加载YOLO模型")
-            return
+            return False
         
         # 第3步: 使用YOLO生成检测结果
         print("\n步骤3: 使用YOLO生成检测结果...")
         detection_dir = generate_detections_with_yolo(sequence_dir, yolo_model)
         if not detection_dir:
             print("错误: 无法生成检测结果")
-            return
+            return False
         
         # 第4步: 运行跟踪评估
         sequence_name = os.path.basename(sequence_dir)
@@ -978,33 +984,322 @@ def main():
         tracking_result = run_tracking_evaluation(sequence_dir, detection_dir, params)
         if not tracking_result:
             print("错误: 无法运行跟踪评估")
-            return
+            return False
         
         # 第5步: 计算MOT指标
         print("\n步骤5: 计算MOT指标...")
         metrics = compute_mot_metrics(params['gt_path'], tracking_result)
         if metrics is None:
             print("错误: 无法计算MOT指标")
+            return False
         
         # 第6步: 可视化结果
         print("\n步骤6: 可视化结果...")
         visualize_results(params['video_path'], tracking_result, params['output_dir'])
         
-        # print("\n=== 评估完成 ===")
         print(f"所有结果已保存到: {params['output_dir']}")
         print(f"日志文件保存在: {os.path.join(params['output_dir'], 'terminallog.txt')}")
+        
+        return True
         
     except Exception as e:
         print(f"运行过程中发生错误: {e}")
         import traceback
         traceback.print_exc()
+        return False
     finally:
         # 关闭日志记录器
         if isinstance(sys.stdout, TeeLogger):
             sys.stdout.close()
             sys.stdout = sys.stdout.terminal
 
+def parse_terminal_log(log_file_path):
+    """解析terminallog.txt文件，提取关键信息"""
+    result = {}
+    
+    try:
+        with open(log_file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # 提取文件夹名（从"运行跟踪评估"行）
+        folder_match = re.search(r'运行跟踪评估\s+(.+?)\.\.\.', content)
+        if folder_match:
+            result['文件夹'] = folder_match.group(1)
+            # 从文件夹名提取实际人数（最后的数字）
+            actual_count_match = re.search(r'(\d+)$', result['文件夹'])
+            if actual_count_match:
+                result['实际人数'] = int(actual_count_match.group(1))
+        
+        # 提取YOLO模型
+        model_match = re.search(r'模型:\s*([^\s]+)', content)
+        if model_match:
+            result['yolo'] = model_match.group(1)
+        
+        # 提取MOT指标
+        mota_match = re.search(r'MOTA:\s*([\d.]+)%', content)
+        if mota_match:
+            result['MOTA'] = mota_match.group(1) + '%'
+        
+        motp_match = re.search(r'MOTP:\s*([\d.]+)%', content)
+        if motp_match:
+            result['MOTP'] = motp_match.group(1) + '%'
+        
+        id_switches_match = re.search(r'ID Switches:\s*(\d+)', content)
+        if id_switches_match:
+            result['ID Switches'] = int(id_switches_match.group(1))
+        
+        matches_match = re.search(r'Matches:\s*(\d+)', content)
+        if matches_match:
+            result['Matches'] = int(matches_match.group(1))
+        
+        fp_match = re.search(r'False Positives:\s*(\d+)', content)
+        if fp_match:
+            result['False Positives'] = int(fp_match.group(1))
+        
+        misses_match = re.search(r'Misses:\s*(\d+)', content)
+        if misses_match:
+            result['Misses'] = int(misses_match.group(1))
+        
+        precision_match = re.search(r'Precision:\s*([\d.]+)%', content)
+        if precision_match:
+            result['Precision'] = precision_match.group(1) + '%'
+        
+        recall_match = re.search(r'Recall:\s*([\d.]+)%', content)
+        if recall_match:
+            result['Recall'] = recall_match.group(1) + '%'
+        
+        mostly_tracked_match = re.search(r'Mostly Tracked:\s*(\d+)', content)
+        if mostly_tracked_match:
+            result['Mostly Tracked'] = int(mostly_tracked_match.group(1))
+        
+        partially_tracked_match = re.search(r'Partially Tracked:\s*(\d+)', content)
+        if partially_tracked_match:
+            result['Partially Tracked'] = int(partially_tracked_match.group(1))
+        
+        mostly_lost_match = re.search(r'Mostly Lost:\s*(\d+)', content)
+        if mostly_lost_match:
+            result['Mostly Lost'] = int(mostly_lost_match.group(1))
+        
+        # 提取计数信息
+        left_count_match = re.search(r'左向计数:\s*(\d+)', content)
+        if left_count_match:
+            result['左计数'] = int(left_count_match.group(1))
+        
+        right_count_match = re.search(r'右向计数:\s*(\d+)', content)
+        if right_count_match:
+            result['右计数'] = int(right_count_match.group(1))
+        
+        total_count_match = re.search(r'总计数:\s*(\d+)', content)
+        if total_count_match:
+            result['总计数'] = int(total_count_match.group(1))
+        
+        # 计算计数准确率
+        if '总计数' in result and '实际人数' in result and result['实际人数'] > 0:
+            accuracy = (result['总计数'] / result['实际人数']) * 100
+            result['计数准确率'] = f"{accuracy:.2f}%"
+        
+    except Exception as e:
+        print(f"解析日志文件 {log_file_path} 时出错: {e}")
+    
+    return result
+
+def analyze_batch_results(parent_dir):
+    """分析批处理结果，生成CSV表格"""
+    print("\n开始分析批处理结果...")
+    
+    # 查找所有包含"Results"的文件夹
+    result_folders = []
+    for item in os.listdir(parent_dir):
+        item_path = os.path.join(parent_dir, item)
+        if os.path.isdir(item_path) and ("Results" in item or "results" in item):
+            result_folders.append(item_path)
+    
+    if not result_folders:
+        print("未找到任何结果文件夹")
+        return
+    
+    print(f"找到 {len(result_folders)} 个结果文件夹")
+    
+    # 解析所有日志文件
+    all_results = []
+    for folder in result_folders:
+        log_file = os.path.join(folder, "terminallog.txt")
+        if os.path.exists(log_file):
+            result = parse_terminal_log(log_file)
+            if result:
+                all_results.append(result)
+                print(f"已解析: {os.path.basename(folder)}")
+        else:
+            print(f"未找到日志文件: {log_file}")
+    
+    if not all_results:
+        print("未找到有效的日志数据")
+        return
+    
+    # 创建CSV文件
+    parent_name = os.path.basename(parent_dir)
+    csv_file = os.path.join(parent_dir, f"{parent_name}_批处理结果表格.csv")
+    
+    # 定义表头
+    headers = [
+        '文件夹', 'yolo', 'MOTA', 'MOTP', 'ID Switches', 'Matches', 
+        'False Positives', 'Misses', 'Precision', 'Recall', 
+        'Mostly Tracked', 'Partially Tracked', 'Mostly Lost', 
+        '左计数', '右计数', '总计数', '实际人数', '计数准确率'
+    ]
+    
+    # 写入CSV文件
+    with open(csv_file, 'w', newline='', encoding='utf-8-sig') as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        
+        for result in all_results:
+            # 确保所有字段都存在
+            row = {}
+            for header in headers:
+                row[header] = result.get(header, '')
+            writer.writerow(row)
+    
+    print(f"CSV文件已保存到: {csv_file}")
+    
+    # 计算平均值
+    numeric_fields = ['ID Switches', 'Matches', 'False Positives', 'Misses', 
+                     'Mostly Tracked', 'Partially Tracked', 'Mostly Lost', 
+                     '左计数', '右计数', '总计数', '实际人数']
+    
+    percentage_fields = ['MOTA', 'MOTP', 'Precision', 'Recall', '计数准确率']
+    
+    print("\n=== 统计汇总 ===")
+    print(f"处理文件夹数量: {len(all_results)}")
+    
+    # 计算数值字段平均值
+    for field in numeric_fields:
+        values = [result[field] for result in all_results if field in result and isinstance(result[field], (int, float))]
+        if values:
+            avg = sum(values) / len(values)
+            print(f"{field}平均值: {avg:.2f}")
+    
+    # 计算百分比字段平均值
+    for field in percentage_fields:
+        values = []
+        for result in all_results:
+            if field in result and result[field]:
+                try:
+                    # 移除百分号并转换为数字
+                    val_str = str(result[field]).replace('%', '')
+                    values.append(float(val_str))
+                except:
+                    pass
+        if values:
+            avg = sum(values) / len(values)
+            print(f"{field}平均值: {avg:.2f}%")
+
+def clean_old_files(parent_dir):
+    """清空旧的结果文件和日志文件"""
+    print("检查并清理旧文件...")
+    
+    # 清理旧的结果文件夹
+    result_folders = []
+    for item in os.listdir(parent_dir):
+        item_path = os.path.join(parent_dir, item)
+        if os.path.isdir(item_path) and ("Results" in item or "results" in item):
+            result_folders.append(item_path)
+    
+    if result_folders:
+        print(f"发现 {len(result_folders)} 个旧结果文件夹，正在清理...")
+        for folder in result_folders:
+            try:
+                shutil.rmtree(folder)
+                print(f"  已删除: {os.path.basename(folder)}")
+            except Exception as e:
+                print(f"  删除失败: {os.path.basename(folder)} - {e}")
+    
+    # 清理旧的日志文件（包括带前缀的文件）
+    parent_name = os.path.basename(parent_dir)
+    log_patterns = [
+        "批量处理日志.txt",
+        "批处理结果表格.csv",
+        f"{parent_name}_批量处理日志.txt",
+        f"{parent_name}_批处理结果表格.csv"
+    ]
+    
+    # 清理所有匹配模式的文件
+    for file in os.listdir(parent_dir):
+        if any(file.endswith(pattern) for pattern in ["_批量处理日志.txt", "_批处理结果表格.csv"]) or file in log_patterns:
+            file_path = os.path.join(parent_dir, file)
+            if os.path.isfile(file_path):
+                try:
+                    os.remove(file_path)
+                    print(f"  已删除: {file}")
+                except Exception as e:
+                    print(f"  删除失败: {file} - {e}")
+    
+    print("清理完成！\n")
+
+def main():
+    """主函数 - 批处理版本"""
+    if not os.path.exists(PARENT_FOLDER_PATH):
+        print(f"错误: 指定的父目录不存在: {PARENT_FOLDER_PATH}")
+        return
+    
+    # 清空旧文件
+    clean_old_files(PARENT_FOLDER_PATH)
+    
+    # 初始化批处理日志记录器
+    batch_logger = init_batch_logger(PARENT_FOLDER_PATH)
+    
+    print(f"开始批处理评估...")
+    print(f"父目录: {PARENT_FOLDER_PATH}")
+    
+    # 查找所有子文件夹
+    subfolders = []
+    for item in os.listdir(PARENT_FOLDER_PATH):
+        item_path = os.path.join(PARENT_FOLDER_PATH, item)
+        if os.path.isdir(item_path) and not item.startswith('.') and "Results" not in item and "results" not in item:
+            subfolders.append(item_path)
+    
+    if not subfolders:
+        print("未找到任何待处理的子文件夹")
+        return
+    
+    print(f"找到 {len(subfolders)} 个待处理的文件夹")
+    
+    # 处理每个文件夹
+    success_count = 0
+    total_count = len(subfolders)
+    
+    for i, folder in enumerate(subfolders, 1):
+        print(f"\n{'='*80}")
+        print(f"处理进度: {i}/{total_count} - {os.path.basename(folder)}")
+        print(f"{'='*80}")
+        
+        try:
+            success = process_single_folder(folder, PARENT_FOLDER_PATH)
+            if success:
+                success_count += 1
+                print(f"✅ 成功处理: {os.path.basename(folder)}")
+            else:
+                print(f"❌ 处理失败: {os.path.basename(folder)}")
+        except Exception as e:
+            print(f"❌ 处理异常: {os.path.basename(folder)} - {e}")
+        
+        # 恢复批处理日志记录器
+        sys.stdout = batch_logger
+    
+    print(f"\n{'='*80}")
+    print(f"批处理完成!")
+    print(f"成功: {success_count}/{total_count}")
+    print(f"失败: {total_count - success_count}/{total_count}")
+    print(f"{'='*80}")
+    
+    # 分析结果
+    analyze_batch_results(PARENT_FOLDER_PATH)
+    
+    # 关闭批处理日志记录器
+    batch_logger.close()
+    sys.stdout = batch_logger.terminal
+
 # =============== 主程序执行 =============== 
 if __name__ == "__main__":
-    # 运行MOT性能评估
+    # 运行批处理MOT性能评估
     main() 

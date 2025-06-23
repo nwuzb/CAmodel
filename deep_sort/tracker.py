@@ -223,14 +223,15 @@ class Tracker:
         # 边缘区域创建的轨迹使用较短的生存周期
         max_age = self.max_age
         
-        # 检查是否在边缘区域
-        strict_boundary_margin = self.boundary_margin * 0.7
-        is_edge_detection = (x1 < strict_boundary_margin or x2 > self.frame_width - strict_boundary_margin or
-                            y1 < strict_boundary_margin or y2 > self.frame_height - strict_boundary_margin)
+        # 检查是否在边缘区域 - 放宽边界限制（Tracker类中的_initiate_track）
+        # 只对真正接近边界的检测进行轻微调整
+        boundary_margin = 15  # 减小严格边界余量从42px到15px
+        is_edge_detection = (x1 < boundary_margin or x2 > self.frame_width - boundary_margin or
+                            y1 < boundary_margin or y2 > self.frame_height - boundary_margin)
                             
-        # 边缘区域的新轨迹生存期较短，避免过度保留
+        # 边缘区域的新轨迹生存期稍短，但不会过于严格
         if is_edge_detection:
-            max_age = min(max_age, 5)  # 边缘区域最大生存期较短
+            max_age = min(max_age, int(max_age * 0.8))  # 边缘区域生存期为原来的80%，而不是固定5帧
         
         self.tracks.append(Track(
             mean, covariance, self._next_id, self.n_init, max_age,
@@ -322,7 +323,7 @@ class AccelerationTracker(Tracker):
                 self.leaving_tracks.add(track.track_id)
                 
     def _check_at_boundary(self, track):
-        """检查轨迹是否触及图像边缘"""
+        """检查轨迹是否完全超出图像边界（需要永久删除）"""
         # 仅检查已确认的轨迹
         if not track.is_confirmed():
             return False
@@ -331,15 +332,23 @@ class AccelerationTracker(Tracker):
         bbox = track.to_tlbr()
         x1, y1, x2, y2 = map(int, bbox)
         
-        # 边界余量
-        margin = 20
+        # 修改逻辑：只有完全超出图像边界才删除
+        # 允许部分超出边界的框继续跟踪
+        completely_outside = (x2 <= 0 or x1 >= self.frame_width or
+                             y2 <= 0 or y1 >= self.frame_height)
         
-        # 检查是否触及或超出图像边缘
-        if (x1 <= margin or x2 >= self.frame_width - margin or
-            y1 <= margin or y2 >= self.frame_height - margin):
-            return True
-            
-        return False
+        return completely_outside
+        
+    def _is_near_boundary(self, track, margin=30):
+        """检查轨迹是否靠近边界（用于调整匹配策略，但不删除）"""
+        bbox = track.to_tlbr()
+        x1, y1, x2, y2 = map(int, bbox)
+        
+        # 检查是否靠近边界
+        near_boundary = (x1 <= margin or x2 >= self.frame_width - margin or
+                        y1 <= margin or y2 >= self.frame_height - margin)
+        
+        return near_boundary
         
     def update(self, detections):
         """Perform measurement update and track management."""
@@ -462,14 +471,15 @@ class AccelerationTracker(Tracker):
         # 边缘区域创建的轨迹使用较短的生存周期
         max_age = self.max_age
         
-        # 检查是否在边缘区域
-        strict_boundary_margin = self.boundary_margin * 0.7
-        is_edge_detection = (x1 < strict_boundary_margin or x2 > self.frame_width - strict_boundary_margin or
-                            y1 < strict_boundary_margin or y2 > self.frame_height - strict_boundary_margin)
+        # 检查是否在边缘区域 - 放宽边界限制（AccelerationTracker类中的_initiate_track）
+        # 只对真正接近边界的检测进行轻微调整
+        boundary_margin = 15  # 减小严格边界余量从42px到15px
+        is_edge_detection = (x1 < boundary_margin or x2 > self.frame_width - boundary_margin or
+                            y1 < boundary_margin or y2 > self.frame_height - boundary_margin)
                             
-        # 边缘区域的新轨迹生存期较短，避免过度保留
+        # 边缘区域的新轨迹生存期稍短，但不会过于严格
         if is_edge_detection:
-            max_age = min(max_age, 5)  # 边缘区域最大生存期较短
+            max_age = min(max_age, int(max_age * 0.8))  # 边缘区域生存期为原来的80%，而不是固定5帧
         
         self.tracks.append(Track(
             mean, covariance, self._next_id, self.n_init, max_age,

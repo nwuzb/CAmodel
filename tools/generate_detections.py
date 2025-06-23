@@ -47,25 +47,84 @@ def extract_image_patch(image, bbox, patch_shape):
     """
     bbox = np.array(bbox)
     if patch_shape is not None:
-        # correct aspect ratio to patch shape
+        # 对于128x128正方形目标，采用智能填充策略而不是强制改变长宽比
         target_aspect = float(patch_shape[1]) / patch_shape[0]
-        new_width = target_aspect * bbox[3]
-        bbox[0] -= (new_width - bbox[2]) / 2
-        bbox[2] = new_width
+        current_aspect = float(bbox[2]) / bbox[3]
+        
+        # 如果目标是正方形（128x128），则保持原始长宽比并选择最大边进行正方形扩展
+        if abs(target_aspect - 1.0) < 0.01:  # 目标是正方形
+            # 使用最大边作为正方形边长
+            max_size = max(bbox[2], bbox[3])
+            
+            # 计算中心点
+            center_x = bbox[0] + bbox[2] / 2
+            center_y = bbox[1] + bbox[3] / 2
+            
+            # 创建正方形边界框
+            bbox[0] = center_x - max_size / 2
+            bbox[1] = center_y - max_size / 2
+            bbox[2] = max_size
+            bbox[3] = max_size
+        else:
+            # 对于非正方形目标，使用原始的长宽比调整
+            new_width = target_aspect * bbox[3]
+            bbox[0] -= (new_width - bbox[2]) / 2
+            bbox[2] = new_width
 
     # convert to top left, bottom right
     bbox[2:] += bbox[:2]
     bbox = bbox.astype(np.int64)
 
-    # clip at image boundaries
+    # clip at image boundaries - 修改逻辑允许部分超出边界的框
+    # 只有当框完全在图像外部时才返回None
+    img_height, img_width = image.shape[:2]
+    
+    # 检查是否完全在图像外部
+    if (bbox[2] <= 0 or bbox[0] >= img_width or 
+        bbox[3] <= 0 or bbox[1] >= img_height):
+        return None
+    
+    # 对部分超出边界的框进行裁剪，但仍然提取特征
     bbox[:2] = np.maximum(0, bbox[:2])
-    bbox[2:] = np.minimum(np.asarray(image.shape[:2][::-1]) - 1, bbox[2:])
+    bbox[2:] = np.minimum(np.asarray([img_width - 1, img_height - 1]), bbox[2:])
+    
+    # 确保裁剪后的框仍然有效（宽度和高度大于0）
     if np.any(bbox[:2] >= bbox[2:]):
         return None
     sx, sy, ex, ey = bbox
     image = image[sy:ey, sx:ex]
-    image = cv2.resize(image, tuple(patch_shape[::-1]))
-    return image
+    
+    # 使用智能缩放+填充，保持长宽比
+    h, w = image.shape[:2]
+    target_h, target_w = patch_shape
+    
+    # 计算缩放比例
+    scale = min(target_w / w, target_h / h)
+    
+    # 计算新的尺寸
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    
+    # 缩放图像
+    if new_w > 0 and new_h > 0:
+        resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    else:
+        resized = cv2.resize(image, (1, 1), interpolation=cv2.INTER_AREA)
+        resized = cv2.resize(resized, (min(target_w//4, 8), min(target_h//4, 8)), 
+                           interpolation=cv2.INTER_CUBIC)
+        new_w, new_h = resized.shape[1], resized.shape[0]
+    
+    # 创建目标尺寸的黑色画布
+    canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+    
+    # 计算居中位置
+    y_offset = (target_h - new_h) // 2
+    x_offset = (target_w - new_w) // 2
+    
+    # 将缩放后的图像放置在画布中心
+    canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized
+    
+    return canvas
 
 
 class ImageEncoder(object):
@@ -116,14 +175,14 @@ class SavedModelEncoder(object):
         
         # 获取输出特征维度
         # 由于SavedModel的特性，我们可能需要实际运行一次模型来获取特征维度
-        # 确保输入是float32类型
-        dummy_input = np.zeros((1, 128, 64, 3), dtype=np.float32)  # 使用float32类型
+        # 确保输入是float32类型，更新为128x128
+        dummy_input = np.zeros((1, 128, 128, 3), dtype=np.float32)  # 更新为128x128
         dummy_output = self.infer(**{self.input_tensor_name: tf.convert_to_tensor(dummy_input)})
         
         # 获取输出特征维度和输入图像形状
         output_key = list(dummy_output.keys())[0]
         self.feature_dim = dummy_output[output_key].shape[-1]
-        self.image_shape = [128, 64, 3]  # 默认图像形状
+        self.image_shape = [128, 128, 3]  # 更新为128x128图像形状
         
         # print(f"加载SavedModel成功。输入签名: {self.input_tensor_name}, 特征维度: {self.feature_dim}")
         
