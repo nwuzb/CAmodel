@@ -60,7 +60,7 @@ from ultralytics import YOLO
 
 # ================ 配置参数（可修改） ================
 # 新增：只需输入包含视频和gt.txt的文件夹路径
-FOLDER_PATH = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_10_clip_07_47_46middle_93"  # ✅带gt及其对应视频的文件夹
+FOLDER_PATH = "/Users/binzeng/MA/GT_videos/对比评估旧视频gt_60_videos/gt_60_5_clip_01_left_28"  # ✅带gt及其对应视频的文件夹
 
 # 自动查找视频和gt.txt文件
 VIDEO_PATH = None
@@ -85,7 +85,7 @@ else:
     raise NotADirectoryError(f"指定的 FOLDER_PATH 不是有效文件夹: {FOLDER_PATH}")
 
 # 输出目录自动命名
-OUTPUT_DIR = FOLDER_PATH + "-results边界参与匹配"  # 可根据需要自定义 ✅
+OUTPUT_DIR = FOLDER_PATH + "-results边界加速度2d"  # 可根据需要自定义 ✅
 # 如果输出目录已存在则清空,不存在则创建 ❗️❗️❗️❗️❗️
 if os.path.exists(OUTPUT_DIR):
     shutil.rmtree(OUTPUT_DIR)
@@ -111,7 +111,7 @@ TRACKING_PARAMS = {
     'max_cosine_distance': 0.4,    # 特征匹配距离阈值
     'nn_budget': 60,               # 特征库大小
     'max_age': 30,                 # 目标消失后保持跟踪的最大帧数（增大，允许更长时间的遮挡）💊
-    'n_init': 2,                   # 确认为稳定跟踪目标所需的最小检测帧数
+    'n_init': 1,                   # 确认为稳定跟踪目标所需的最小检测帧数，2不错
     'max_iou_distance': 0.95,      # 最大IoU距离
     'use_acceleration': True,      # 是否使用加速度卡尔曼滤波器
     # 根据分析结果添加的参数
@@ -434,23 +434,35 @@ def compute_mot_metrics(gt_file, result_file):
         else:
             acc.update(gt_ids, res_ids, [])
     
-    # 计算指标
+    # 计算指标（加入 IDF1/IDP/IDR、Fragmentations 等）
     mh = mm.metrics.create()
     summary = mh.compute(acc, metrics=[
         'num_frames', 'num_objects', 'num_matches', 'num_switches',
-        'num_false_positives', 'num_misses', 'mota', 'motp',
+        'num_false_positives', 'num_misses', 'num_fragmentations',
+        'mota', 'motp',
+        'idf1', 'idp', 'idr',
         'mostly_tracked', 'partially_tracked', 'mostly_lost',
         'precision', 'recall'
     ], name='acc')
+
+    # 额外派生指标：FAF = FP / 帧数
+    num_frames_total = summary['num_frames'].values[0]
+    num_fp = summary['num_false_positives'].values[0]
+    faf = num_fp / num_frames_total if num_frames_total else float('nan')
     
     # 输出指标
     print("\n=============== MOT评估指标 ===============")
     print(f"MOTA: {summary['mota'].values[0]:.2%}")
     print(f"MOTP: {summary['motp'].values[0]:.2%}")
+    print(f"IDF1: {summary['idf1'].values[0]:.2%}")
+    print(f"ID Precision (IDP): {summary['idp'].values[0]:.2%}")
+    print(f"ID Recall (IDR): {summary['idr'].values[0]:.2%}")
     print(f"ID Switches: {summary['num_switches'].values[0]}")
     print(f"Matches: {summary['num_matches'].values[0]}")
+    print(f"Fragmentations (FM): {summary['num_fragmentations'].values[0]}")
     print(f"False Positives: {summary['num_false_positives'].values[0]}")
     print(f"Misses: {summary['num_misses'].values[0]}")
+    print(f"FAF (FP/frame): {faf:.4f}")
     print(f"Precision: {summary['precision'].values[0]:.2%}")
     print(f"Recall: {summary['recall'].values[0]:.2%}")
     print(f"Mostly Tracked: {summary['mostly_tracked'].values[0]}")
@@ -466,10 +478,15 @@ def compute_mot_metrics(gt_file, result_file):
         f.write("=============== MOT评估指标 ===============\n")
         f.write(f"MOTA: {summary['mota'].values[0]:.2%}\n")
         f.write(f"MOTP: {summary['motp'].values[0]:.2%}\n")
+        f.write(f"IDF1: {summary['idf1'].values[0]:.2%}\n")
+        f.write(f"ID Precision (IDP): {summary['idp'].values[0]:.2%}\n")
+        f.write(f"ID Recall (IDR): {summary['idr'].values[0]:.2%}\n")
         f.write(f"ID Switches: {summary['num_switches'].values[0]}\n")
         f.write(f"Matches: {summary['num_matches'].values[0]}\n")
+        f.write(f"Fragmentations (FM): {summary['num_fragmentations'].values[0]}\n")
         f.write(f"False Positives: {summary['num_false_positives'].values[0]}\n")
         f.write(f"Misses: {summary['num_misses'].values[0]}\n")
+        f.write(f"FAF (FP/frame): {faf:.4f}\n")
         f.write(f"Precision: {summary['precision'].values[0]:.2%}\n")
         f.write(f"Recall: {summary['recall'].values[0]:.2%}\n")
         f.write(f"Mostly Tracked: {summary['mostly_tracked'].values[0]}\n")
