@@ -100,7 +100,7 @@ class Tracker:
     #在Tracker类的初始化中，n_init参数被设置为3：
     #新检测需要连续3帧都成功匹配才会被标记为"Confirmed"
     #如果在这3帧内任何一帧没有匹配成功，轨迹会被标记为"Deleted"
-    def __init__(self, metric, max_iou_distance=0.7, max_age=30, n_init=2):   #在Tracker类的初始化中，n_init参数被默认设置为3
+    def __init__(self, metric, max_iou_distance=0.9, max_age=30, n_init=2):   #在Tracker类的初始化中，n_init参数被默认设置为3
         self.metric = metric
         self.max_iou_distance = max_iou_distance
         self.max_age = max_age

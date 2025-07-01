@@ -60,7 +60,8 @@ from ultralytics import YOLO
 
 # ================ 配置参数（可修改） ================
 # 新增：只需输入包含视频和gt.txt的文件夹路径
-FOLDER_PATH = "/Users/binzeng/MA/GT_videos/对比评估旧视频gt_60_videos/gt_60_5_clip_01_left_28"  # ✅带gt及其对应视频的文件夹
+# FOLDER_PATH = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_2_clip_03_right_124"  # ✅带gt及其对应视频的文件夹
+FOLDER_PATH = "/Users/binzeng/MA/GT_videos/gt_60_videos/test_gt_60_2_clip_02_right_47_test"  # ✅带gt及其对应视频的文件夹
 
 # 自动查找视频和gt.txt文件
 VIDEO_PATH = None
@@ -110,8 +111,8 @@ TRACKING_PARAMS = {
     'min_detection_height': 15,    # 最小检测框高度 💊 20不错，但有小于15的值
     'max_cosine_distance': 0.4,    # 特征匹配距离阈值
     'nn_budget': 60,               # 特征库大小
-    'max_age': 30,                 # 目标消失后保持跟踪的最大帧数（增大，允许更长时间的遮挡）💊
-    'n_init': 1,                   # 确认为稳定跟踪目标所需的最小检测帧数，2不错
+    'max_age': 30,                 # 目标消失后保持跟踪的最大帧数（允许多少帧时间的遮挡）💊
+    'n_init': 2,                   # 确认为稳定跟踪目标所需的最小检测帧数，2不错
     'max_iou_distance': 0.95,      # 最大IoU距离
     'use_acceleration': True,      # 是否使用加速度卡尔曼滤波器
     # 根据分析结果添加的参数
@@ -131,8 +132,9 @@ VISUALIZATION_PARAMS = {
     'track_thickness': 2,              # 跟踪框线宽
     'remap_ids': True,                 # 是否重映射ID
     'show_original_id': False,         # 是否显示原始ID
-    'line_margin': 0.2,                # 旧单条线位置（保留给调试）
-    'count_zone_margin': 0.3,          # 计数带宽度百分比(左右对称)
+    # 'line_margin': 0.2,                # 旧单计数线条线位置（保留给调试）
+    'count_zone_inner': 0,          # 计数带内侧起始(距左右边界5% 宽度)
+    'count_zone_outer': 0.3,           # 计数带外侧结束(距左右边界20% 宽度)之前是0-0.3的技术区域带
     'persistence_frames': 4,           # 连续帧数阈值
 }
 
@@ -587,9 +589,14 @@ def visualize_results(video_path, tracking_result, output_dir):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(vis_output_path, fourcc, fps, (width, height))
 
-    zone_margin = VISUALIZATION_PARAMS.get('count_zone_margin', 0.1)
-    left_zone_limit = int(width * zone_margin)            # X <= left_zone_limit 属于左计数带
-    right_zone_limit = int(width * (1 - zone_margin))     # X >= right_zone_limit 属于右计数带
+    # 计数带：距离左右边框 5%~20% 的区域
+    inner_margin = VISUALIZATION_PARAMS.get('count_zone_inner', 0.05)
+    outer_margin = VISUALIZATION_PARAMS.get('count_zone_outer', 0.2)
+    # 宽度转换为像素坐标
+    left_inner  = int(width * inner_margin)
+    left_outer  = int(width * outer_margin)
+    right_inner = int(width * (1 - outer_margin))
+    right_outer = int(width * (1 - inner_margin))
 
     left_counted_ids = set() # 左计数带成功计数ID
     right_counted_ids = set()# 右计数带成功计数ID
@@ -637,8 +644,8 @@ def visualize_results(video_path, tracking_result, output_dir):
 
                 # 画计数带（半透明矩形）
                 overlay = frame.copy()
-                cv2.rectangle(overlay, (0,0), (left_zone_limit, height), (0,255,255), -1)
-                cv2.rectangle(overlay, (right_zone_limit,0), (width, height), (0,255,255), -1)
+                cv2.rectangle(overlay, (left_inner,0), (left_outer, height), (0,255,255), -1)
+                cv2.rectangle(overlay, (right_inner,0), (right_outer, height), (0,255,255), -1)
                 alpha = 0.2
                 cv2.addWeighted(overlay, alpha, frame, 1-alpha, 0, frame)
 
@@ -712,13 +719,13 @@ def visualize_results(video_path, tracking_result, output_dir):
 
                         # ==== 区域持续帧计数逻辑 ====
                         # 左带
-                        if center_x <= left_zone_limit:
+                        if left_inner <= center_x <= left_outer:
                             left_zone_counter[original_id] = left_zone_counter.get(original_id,0)+1
                             right_zone_counter[original_id] = 0
                             if left_zone_counter[original_id] == persistence_needed and original_id not in left_counted_ids:
                                 left_counted_ids.add(original_id)
                         # 右带
-                        elif center_x >= right_zone_limit:
+                        elif right_inner <= center_x <= right_outer:
                             right_zone_counter[original_id] = right_zone_counter.get(original_id,0)+1
                             left_zone_counter[original_id] = 0
                             if right_zone_counter[original_id] == persistence_needed and original_id not in right_counted_ids:
