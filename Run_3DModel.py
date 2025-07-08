@@ -66,8 +66,8 @@ print("\n>>> 已将 DeepSORT KalmanFilter 替换为基于针孔相机的 Physica
 # 相机内参
 # F_PIXELS    # 焦距 (像素)"像素高度 ↔ 实际距离"互换的比例尺
 # cx,cy 把 3D 点映射到正确的像素位置。
-# F_PIXELS, CX, CY, HEAD_H = 795.0, 268.0, 137.0, 0.3 # 2k 0.6裁剪右侧 相机内参
-F_PIXELS, CX, CY, HEAD_H = 795.0, 1268.0, 137.0, 0.3 # 2k 0.6裁剪左侧 相机内参
+F_PIXELS, CX, CY, HEAD_H = 795.0, 268.0, 137.0, 0.3 # 2k 0.6裁剪右侧 相机内参
+# F_PIXELS, CX, CY, HEAD_H = 795.0, 1268.0, 137.0, 0.3 # 2k 0.6裁剪左侧 相机内参
 
 # F_PIXELS, CX, CY, HEAD_H = 1600.3, 515.0, 153.0, 0.3 # 4k 0.6裁剪右侧 相机内参 49.69
 # F_PIXELS, CX, CY, HEAD_H = 1600.3, 1789.0, 153.0, 0.3 # 4k 0.6裁剪左侧 相机内参 
@@ -78,7 +78,7 @@ DT = 1.0 / fps
 
 # ---------------- 输入输出 -------------------
 # FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_2_clip_03_right_124" #2k 0.6裁剪右侧 相机内参
-# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/test_gt_60_2_clip_02_right_47_test"
+FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/test_gt_60_2_clip_02_right_47_test"
 # FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_2_clip_02_right_47"2k 0.6裁剪右侧 相机内参
 # FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_4_clip_02_right_100" #4k 0.6裁剪右侧 相机内参
 # FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_1_clip_01_right_54" #4k 0.6裁剪右侧 相机内参
@@ -86,7 +86,7 @@ DT = 1.0 / fps
 
 # FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_6_clip_06_left_46" #4k 0.6裁剪左侧 相机内参
 # FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_10_clip_01_left_53" #4k 0.6裁剪左侧 相机内参
-FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_5_clip_01_left_28" #2k 0.6裁剪左侧 相机内参
+# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_5_clip_01_left_28" #2k 0.6裁剪左侧 相机内参
 
 # 在文件夹中自动查找唯一的视频文件
 _video_exts = (".mp4")
