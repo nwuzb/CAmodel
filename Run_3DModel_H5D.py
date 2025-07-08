@@ -34,12 +34,32 @@ sys.modules["deep_sort.tracker"].kalman_filter = sys.modules["deep_sort.kalman_f
 
 print("\n>>> 已将 DeepSORT KalmanFilter 替换为 动态头高 5D EKF (H5D) <<<\n")
 
-# 摄像机参数（可按需修改）
-F_PIXELS, CX, CY = 795.0, 268.0, 137.0
 DEFAULT_HEAD = 0.30
 
+# 摄像机参数（可按需修改）
+
+# F_PIXELS, CX, CY = 795.0, 268.0, 137.0 # 2k 0.6裁剪右侧 相机内参 A
+# F_PIXELS, CX, CY = 795.0, 1268.0, 137.0 # 2k 0.6裁剪左侧 相机内参B
+
+# F_PIXELS, CX, CY = 1600.3, 515.0, 153.0 # 4k 0.6裁剪右侧 相机内参 C
+F_PIXELS, CX, CY = 1600.3, 1789.0, 153.0 # 4k 0.6裁剪左侧 相机内参 D
+
 # 输入输出路径
-FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/test_gt_60_2_clip_02_right_47_test"
+# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/test_gt_60_2_clip_02_right_47_test" #2k 0.6裁剪右侧 相机内参 A ⭐️
+# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/test_60fps_gt_4_clip_02_rightpart_99_test" # 调试中⭐️
+
+# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_2_clip_03_right_124" #2k 0.6裁剪右侧 相机内参 A
+# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_2_clip_02_right_47" #2k 0.6裁剪右侧 相机内参 A
+# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_5_clip_03_right_32" #2k 0.6裁剪右侧 相机内参 A
+
+# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_5_clip_01_left_28" #2k 0.6裁剪左侧 相机内参 B
+
+# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_4_clip_02_right_100" #4k 0.6裁剪右侧 相机内参 C
+# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_1_clip_01_right_54" #4k 0.6裁剪右侧 相机内参 C
+
+# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_6_clip_06_left_46" #4k 0.6裁剪左侧 相机内参 D
+FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_10_clip_01_left_53" #4k 0.6裁剪左侧 相机内参 D
+
 video_candidates = [f for f in os.listdir(FOLDER) if f.lower().endswith((".mp4",))]
 if not video_candidates:
     raise FileNotFoundError("未找到视频")
@@ -63,10 +83,18 @@ import numpy as np
 
 from physical3dkf_h5d import Physical3DKF_H5D
 
+# ============ 使 KF 与上方相机参数保持一致 ============
+class CustomPhysical3DKF_H5D(Physical3DKF_H5D):
+    """包装 Physical3DKF_H5D，使其默认使用当前文件中 F_PIXELS/CX/CY 变量。"""
+    def __init__(self, f: float = F_PIXELS, cx: float = CX, cy: float = CY,
+                 H0: float = DEFAULT_HEAD, dt: float = DT, max_decel: float = 1.0):
+        super().__init__(f=f, cx=cx, cy=cy, H0=H0, dt=dt, max_decel=max_decel)
+
 # 注入 KF
 kf_mod = sys.modules["deep_sort.kalman_filter"]
-kf_mod.KalmanFilter            = Physical3DKF_H5D
-kf_mod.AccelerationKalmanFilter = Physical3DKF_H5D
+# 用自定义 KF 替换默认 KalmanFilter
+kf_mod.KalmanFilter = CustomPhysical3DKF_H5D
+kf_mod.AccelerationKalmanFilter = CustomPhysical3DKF_H5D
 
 # ---- DeepSORT 下游适配补丁 ----
 import deep_sort.linear_assignment as _la
