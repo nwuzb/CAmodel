@@ -109,9 +109,9 @@ TRACKING_PARAMS = {
     'min_confidence': 0.5,         # 检测置信度阈值
     'nms_max_overlap': 0.5,        # 非极大值抑制阈值
     'min_detection_height': 15,    # 最小检测框高度 💊 20不错，但有小于15的值
-    'max_cosine_distance': 0.4,    # 特征匹配距离阈值
+    'max_cosine_distance': 0.1,    # 特征匹配距离阈值
     'nn_budget': 60,               # 特征库大小
-    'max_age': 30,                 # 目标消失后保持跟踪的最大帧数（允许多少帧时间的遮挡）💊
+    'max_age': 20,                 # 目标消失后保持跟踪的最大帧数（允许多少帧时间的遮挡）💊
     'n_init': 2,                   # 确认为稳定跟踪目标所需的最小检测帧数，2不错
     'max_iou_distance': 0.95,      # 最大IoU距离
     'use_acceleration': True,      # 是否使用加速度卡尔曼滤波器
@@ -139,8 +139,7 @@ VISUALIZATION_PARAMS = {
 }
 
 # 特征提取模型路径（如果为空，将使用默认的mars-small128.pb，但是默认的不存在）
-# MODEL_PATH = "/Users/binzeng/MA/CAmodel/head_feature_encoder_best"    # 特征提取器模型路径，为空时自动查找
-MODEL_PATH = "/Users/binzeng/MA/CAmodel/head_feature_encoder_colab_best"    # 特征提取器模型路径，为空时自动查找
+MODEL_PATH = "/Users/binzeng/Downloads/head_feature_encoder_colab_best.pth"    # 特征提取器模型路径，为空时自动查找
 # ===================================================
 
 def load_yolo_model():
@@ -301,7 +300,21 @@ def generate_detections_with_yolo(sequence_dir, model):
             except Exception as e:
                 print(f"特征提取错误: {e}")
                 features = np.zeros((len(boxes), 512))
-            
+
+            # # ================== Debug: 外观特征有效性检测 ==================
+            # # 只要同帧检测框 ≥2，则打印一次特征差异，便于快速观察特征是否塌缩
+            # if len(features) >= 2:
+            #     f1, f2 = features[0], features[1]
+            #     # 余弦距离
+            #     cos_dist = 1.0 - float(np.dot(f1, f2) / (np.linalg.norm(f1) * np.linalg.norm(f2) + 1e-8))
+            #     # L2 距离
+            #     l2_dist = float(np.linalg.norm(f1 - f2))
+            #     # 同一 patch 重复编码，用于检测 encoder 随机性/精度
+            #     same_feat = encoder(image, np.expand_dims(boxes[0], axis=0))[0]
+            #     cos_same = 1.0 - float(np.dot(f1, same_feat) / (np.linalg.norm(f1) * np.linalg.norm(same_feat) + 1e-8))
+            #     print(f"[FeatDbg] frame {frame_idx:05d}: cos(f1,f2)={cos_dist:.6f}  L2(f1,f2)={l2_dist:.6f}  cos(f1,same)={cos_same:.6f}")
+            # ============================================================
+
             # 合并检测和特征
             for i, (box, feature) in enumerate(zip(boxes, features)):
                 # MOTChallenge格式前10列: frame,id,x,y,w,h,score,...
@@ -309,7 +322,7 @@ def generate_detections_with_yolo(sequence_dir, model):
                 detection[0] = frame_idx  # frame
                 detection[1] = -1         # id (在检测阶段设为-1)
                 detection[2:6] = box      # bbox (x,y,w,h)
-                detection[6] = 1.0        # confidence
+                detection[6] = 1.0        # confidence，导致deep_sort_app中min_confidence失效，但实验如实
                 detection[10:] = feature
                 detections_with_features.append(detection)
     

@@ -182,6 +182,19 @@ class Tracker:
                 debug=self.debug_direction
             )
 
+            # # 调试：打印外观 cost_matrix 的统计信息 (仅统计有效值)
+            # try:
+            #     thr = self.metric.matching_threshold + 1e-6
+            #     valid_vals = cost_matrix[cost_matrix < thr]
+            #     if valid_vals.size:
+            #         print(
+            #             f"[AppearanceDist] valid_pairs={valid_vals.size} min={valid_vals.min():.3f} "
+            #             f"mean={valid_vals.mean():.3f} max={valid_vals.max():.3f}")
+            #     else:
+            #         print("[AppearanceDist] no valid appearance pairs this step")
+            # except Exception:
+            #     pass
+
             return cost_matrix
 
         # Split track set into confirmed and unconfirmed tracks.
@@ -429,6 +442,19 @@ class AccelerationTracker(Tracker):
                 min_age=self.direction_min_age,
                 debug=self.debug_direction
             )
+
+            # # 调试：打印外观 cost_matrix 的统计信息 (仅统计有效值)
+            # try:
+            #     thr = self.metric.matching_threshold + 1e-6
+            #     valid_vals = cost_matrix[cost_matrix < thr]
+            #     if valid_vals.size:
+            #         print(
+            #             f"[AppearanceDist] valid_pairs={valid_vals.size} min={valid_vals.min():.3f} "
+            #             f"mean={valid_vals.mean():.3f} max={valid_vals.max():.3f}")
+            #     else:
+            #         print("[AppearanceDist] no valid appearance pairs this step")
+            # except Exception:
+            #     pass
 
             return cost_matrix
 

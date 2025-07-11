@@ -208,6 +208,84 @@ class SavedModelEncoder(object):
         return out
 
 
+# =========================  PyTorch Encoder  ==========================
+# 允许直接加载 .pth 权重，省去 TF / PB 转换。
+
+import torch
+import torch.nn.functional as F
+try:
+    from torchvision import transforms as _tvf
+except ImportError:
+    _tvf = None  # 若缺失 torchvision，会在 __init__ 报错
+
+try:
+    from efficientnet_pytorch import EfficientNet as _EffNet
+except ImportError:
+    _EffNet = None
+
+
+class TorchEncoder:
+    """Load EfficientNet-B0 .pth and generate 128-dim embeddings (L2-norm)."""
+
+    def __init__(self, pth_path: str, input_size: int = 128, feat_dim: int = 128, device: str = "mps"):
+        if _EffNet is None or _tvf is None:
+            raise ImportError("torchvision 或 efficientnet_pytorch 未安装，无法使用 TorchEncoder")
+
+        self.device = torch.device(device)
+        self.input_size = input_size
+
+        # ---------- build network ----------
+        backbone = _EffNet.from_name("efficientnet-b0")
+        backbone._fc = torch.nn.Identity()
+        in_feat = backbone._conv_head.out_channels
+
+        class _ReIDModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.backbone = backbone
+                self.fc = torch.nn.Linear(in_feat, feat_dim)
+                self.bn = torch.nn.BatchNorm1d(feat_dim)
+
+            def forward(self, x):
+                f = self.backbone(x)
+                f = self.fc(f)
+                f = self.bn(f)
+                f = F.normalize(f, p=2, dim=1)
+                return f
+
+        self.model = _ReIDModel().to(self.device)
+        self.model.load_state_dict(torch.load(pth_path, map_location=self.device), strict=False)
+        self.model.eval()
+
+        # ---------- preprocess ----------
+        self.pre = _tvf.Compose([
+            _tvf.ToPILImage(),
+            _tvf.Resize((input_size, input_size)),
+            _tvf.ToTensor(),
+            _tvf.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+        # 供 create_box_encoder 使用
+        self.image_shape = [input_size, input_size, 3]
+
+    @torch.no_grad()
+    def __call__(self, patches, batch_size: int = 32):
+        # patches: uint8 BGR (H,W,C)
+        tensors = []
+        for img in patches:
+            # BGR → RGB
+            img_rgb = img[:, :, ::-1]
+            tensors.append(self.pre(img_rgb))
+        data = torch.stack(tensors).to(self.device)
+
+        feats = []
+        for i in range(0, len(data), batch_size):
+            out = self.model(data[i:i + batch_size])
+            feats.append(out.cpu())
+        feats = torch.cat(feats, dim=0).numpy()
+        return feats
+
+
 def create_box_encoder(model_filename, input_name="images",
                        output_name="features", batch_size=32):
     """
@@ -222,8 +300,31 @@ def create_box_encoder(model_filename, input_name="images",
     返回:
     encoder: 函数，接受图像和边界框列表，返回对应的特征向量
     """
-    # 判断是文件还是目录，以确定模型类型
-    if os.path.isdir(model_filename):
+    # ---- 根据模型类型选择加载器 ----
+    if model_filename.endswith(".pth"):
+        # 直接使用 PyTorch + EfficientNet
+        image_encoder = TorchEncoder(model_filename)
+
+    elif model_filename.endswith(".onnx"):
+        # 可选：在安装了 onnxruntime 时使用
+        try:
+            import onnxruntime as ort
+
+            class OnnxEncoder:
+                def __init__(self, onnx_path):
+                    self.sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+                    self.input_name = self.sess.get_inputs()[0].name
+                    self.output_name = self.sess.get_outputs()[0].name
+                    self.image_shape = [128, 128, 3]
+                def __call__(self, data_x, batch_size=32):
+                    data_x = data_x.astype("float32") / 255.0
+                    return self.sess.run([self.output_name], {self.input_name: data_x})[0]
+
+            image_encoder = OnnxEncoder(model_filename)
+        except ImportError:
+            raise ImportError("请先 pip install onnxruntime 或使用 .pth/.pb/.savedmodel")
+
+    elif os.path.isdir(model_filename):
         # print(f"检测到SavedModel目录: {model_filename}")
         try:
             # 使用SavedModel加载器

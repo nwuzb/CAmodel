@@ -34,18 +34,18 @@ sys.modules["deep_sort.tracker"].kalman_filter = sys.modules["deep_sort.kalman_f
 
 print("\n>>> 已将 DeepSORT KalmanFilter 替换为 动态头高 5D EKF (H5D) <<<\n")
 
-DEFAULT_HEAD = 0.30
+DEFAULT_HEAD = 0.30 # 默认头高，yolo检测的也是头部框，也是头高。
 
 # 摄像机参数（可按需修改）
 
-# F_PIXELS, CX, CY = 795.0, 268.0, 137.0 # 2k 0.6裁剪右侧 相机内参 A
+F_PIXELS, CX, CY = 795.0, 268.0, 137.0 # 2k 0.6裁剪右侧 相机内参 A
 # F_PIXELS, CX, CY = 795.0, 1268.0, 137.0 # 2k 0.6裁剪左侧 相机内参B
 
 # F_PIXELS, CX, CY = 1600.3, 515.0, 153.0 # 4k 0.6裁剪右侧 相机内参 C
-F_PIXELS, CX, CY = 1600.3, 1789.0, 153.0 # 4k 0.6裁剪左侧 相机内参 D
+# F_PIXELS, CX, CY = 1600.3, 1789.0, 153.0 # 4k 0.6裁剪左侧 相机内参 D
 
 # 输入输出路径
-# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/test_gt_60_2_clip_02_right_47_test" #2k 0.6裁剪右侧 相机内参 A ⭐️
+FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/test_gt_60_2_clip_02_right_47_test" #2k 0.6裁剪右侧 相机内参 A ⭐️
 # FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/test_60fps_gt_4_clip_02_rightpart_99_test" # 调试中⭐️
 
 # FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_2_clip_03_right_124" #2k 0.6裁剪右侧 相机内参 A
@@ -58,7 +58,7 @@ F_PIXELS, CX, CY = 1600.3, 1789.0, 153.0 # 4k 0.6裁剪左侧 相机内参 D
 # FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_1_clip_01_right_54" #4k 0.6裁剪右侧 相机内参 C
 
 # FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_6_clip_06_left_46" #4k 0.6裁剪左侧 相机内参 D
-FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_10_clip_01_left_53" #4k 0.6裁剪左侧 相机内参 D
+# FOLDER = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_10_clip_01_left_53" #4k 0.6裁剪左侧 相机内参 D
 
 video_candidates = [f for f in os.listdir(FOLDER) if f.lower().endswith((".mp4",))]
 if not video_candidates:
@@ -115,8 +115,21 @@ def _gate_cost_matrix_3d(kf, cost_matrix, tracks, detections, track_indices, det
         cost_matrix[row, gating_distance > gating_threshold] = gated_cost
     return cost_matrix
 
-# 覆盖
-_la.gate_cost_matrix = _gate_cost_matrix_3d
+# 开关：控制是否使用自定义 3D gate
+USE_3D_GATE = False  # True=3D gate, False=原4D gate ⭐️
+if USE_3D_GATE:
+    _la.gate_cost_matrix = _gate_cost_matrix_3d
+else:
+    _la.gate_cost_matrix = _orig_gate
+
+# ---- 强制关闭所有门控（仅用于测试外观匹配） ---- ⚠️ ⚠️ ⚠️
+DISABLE_GATING = True  # ⚠️ 调试完后务必改回 False
+if DISABLE_GATING:
+    # 1) 禁用马氏距离 / Chi2 门控：直接返回原 cost_matrix
+    _la.gate_cost_matrix = lambda kf, cost_matrix, tracks, detections, track_indices, detection_indices, **kwargs: cost_matrix
+    # 2) 禁用方向门控：apply_direction_gating 恒等返回
+    _tracker_mod = _ibl.import_module("deep_sort.tracker")
+    _tracker_mod.apply_direction_gating = lambda cost_matrix, *args, **kwargs: cost_matrix
 
 # 2) bbox 计算重写
 _track = _ibl.import_module("deep_sort.track")
