@@ -61,6 +61,9 @@ from ultralytics import YOLO
 # ================ 配置参数（可修改） ================
 # 新增：只需输入包含视频和gt.txt的文件夹路径
 # FOLDER_PATH = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_2_clip_03_right_124"  # ✅带gt及其对应视频的文件夹
+
+# FOLDER_PATH = "/Users/binzeng/MA/GT_videos/gt_60_videos/gt_60_13_clip_01_left_16"  # ✅带gt及其对应视频的文件夹
+
 FOLDER_PATH = "/Users/binzeng/MA/GT_videos/gt_60_videos/test_gt_60_2_clip_02_right_47_test"  # ✅带gt及其对应视频的文件夹
 
 # 自动查找视频和gt.txt文件
@@ -95,8 +98,7 @@ os.makedirs(OUTPUT_DIR)
 # YOLO模型参数
 YOLO_PARAMS = {
     # 'model_path': "/Users/binzeng/MA/EvaluateVideos/finetune.pt",  # YOLO模型权重路径
-    'model_path': "/Users/binzeng/MA/EvaluateVideos/freeze10.pt",  # YOLO模型权重路径
-    # 'model_path': "/Users/binzeng/MA/EvaluateVideos/freeze23.pt",  # YOLO模型权重路径
+    'model_path': "/Users/binzeng/MA/YOLO检测模型权重/freeze10.pt",  # YOLO模型权重路径
 
     'conf_thres': 0.7,           # 置信度阈值
     'iou_thres': 0.5,           # NMS IOU阈值
@@ -109,7 +111,7 @@ TRACKING_PARAMS = {
     'min_confidence': 0.5,         # 检测置信度阈值
     'nms_max_overlap': 0.5,        # 非极大值抑制阈值
     'min_detection_height': 15,    # 最小检测框高度 💊 20不错，但有小于15的值
-    'max_cosine_distance': 0.1,    # 特征匹配距离阈值
+    'max_cosine_distance': 0.99,    # 特征匹配距离阈值
     'nn_budget': 60,               # 特征库大小
     'max_age': 20,                 # 目标消失后保持跟踪的最大帧数（允许多少帧时间的遮挡）💊
     'n_init': 2,                   # 确认为稳定跟踪目标所需的最小检测帧数，2不错
@@ -133,13 +135,13 @@ VISUALIZATION_PARAMS = {
     'remap_ids': True,                 # 是否重映射ID
     'show_original_id': False,         # 是否显示原始ID
     # 'line_margin': 0.2,                # 旧单计数线条线位置（保留给调试）
-    'count_zone_inner': 0,          # 计数带内侧起始(距左右边界5% 宽度)
-    'count_zone_outer': 0.3,           # 计数带外侧结束(距左右边界20% 宽度)之前是0-0.3的技术区域带
-    'persistence_frames': 4,           # 连续帧数阈值
+    'count_zone_inner': 0.05,          # 计数带内侧起始(距左右边界5% 宽度)
+    'count_zone_outer': 0.2,           # 计数带外侧结束(距左右边界20% 宽度)之前是0-0.3的技术区域带
+    'persistence_frames': 2,           # 连续帧数阈值
 }
 
 # 特征提取模型路径（如果为空，将使用默认的mars-small128.pb，但是默认的不存在）
-MODEL_PATH = "/Users/binzeng/Downloads/head_feature_encoder_colab_best.pth"    # 特征提取器模型路径，为空时自动查找
+MODEL_PATH = "/Users/binzeng/MA/ReID模型权重/head_feature_encoder_colab_best.pth"    # 特征提取器模型路径，为空时自动查找
 # ===================================================
 
 def load_yolo_model():
@@ -576,7 +578,7 @@ def filter_short_tracks(tracking_data, min_length=1):
         # 确保返回值具有正确的列数
         return np.empty((0, tracking_data.shape[1] if hasattr(tracking_data, 'shape') and len(tracking_data.shape) > 1 else 10))
 
-def visualize_results(video_path, tracking_result, output_dir):
+def visualize_results(video_path, tracking_result, output_dir, gt_path=None):
     """可视化跟踪结果"""
     if not os.path.exists(tracking_result):
         print(f"错误: 找不到结果文件 {tracking_result}")
@@ -584,7 +586,30 @@ def visualize_results(video_path, tracking_result, output_dir):
 
     try:
         tracking_data = np.loadtxt(tracking_result, delimiter=',')
-        tracking_data = filter_short_tracks(tracking_data, min_length=1) # 过滤掉短轨迹✅
+        tracking_data = filter_short_tracks(tracking_data, min_length=3) # 过滤掉短轨迹✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅
+
+        # -------- 零相位滑动窗口平滑（中心点）--------
+        window = int(VISUALIZATION_PARAMS.get('smooth_window', 5))
+        if window >= 3 and window % 2 == 1:
+            half_w = window // 2
+            id_indices = {}
+            for idx, row in enumerate(tracking_data):
+                tid = int(row[1])
+                id_indices.setdefault(tid, []).append(idx)
+            for indices in id_indices.values():
+                indices.sort(key=lambda i: tracking_data[i,0])
+                centers_x = [tracking_data[i,2] + tracking_data[i,4]/2 for i in indices]
+                centers_y = [tracking_data[i,3] + tracking_data[i,5]/2 for i in indices]
+                for j, idx_orig in enumerate(indices):
+                    start = max(0, j - half_w)
+                    end = min(len(indices), j + half_w + 1)
+                    avg_cx = sum(centers_x[start:end]) / (end - start)
+                    avg_cy = sum(centers_y[start:end]) / (end - start)
+                    w = tracking_data[idx_orig,4]
+                    h = tracking_data[idx_orig,5]
+                    tracking_data[idx_orig,2] = avg_cx - w/2
+                    tracking_data[idx_orig,3] = avg_cy - h/2
+        # -------- 平滑结束 --------
     except Exception as e:
         print(f"加载或过滤跟踪结果时出错: {e}")
         return
@@ -601,6 +626,8 @@ def visualize_results(video_path, tracking_result, output_dir):
     vis_output_path = os.path.join(output_dir, "visualized_tracking.mp4")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(vis_output_path, fourcc, fps, (width, height))
+
+
 
     # 计数带：距离左右边框 5%~20% 的区域
     inner_margin = VISUALIZATION_PARAMS.get('count_zone_inner', 0.05)
@@ -621,6 +648,9 @@ def visualize_results(video_path, tracking_result, output_dir):
     left_zone_counter = {}
     right_zone_counter = {}
     last_frame_dict = {}  # 记录上次出现帧号，用于Pred判断
+
+    # --- 为了ID切换时保持框稳定：保存上一帧绘制的框 ---
+    prev_boxes = {}  # id -> (x,y,w,h, center_x, center_y)
     persistence_needed = VISUALIZATION_PARAMS.get('persistence_frames',3)
 
     # 加载YOLO检测结果
@@ -633,6 +663,14 @@ def visualize_results(video_path, tracking_result, output_dir):
             yolo_dets = np.load(yolo_det_file)
         except Exception as e:
             print(f"加载YOLO检测结果时出错: {e}")
+
+    # === 新增: 加载GT数据 ===
+    gt_data = None
+    if gt_path is not None and os.path.exists(gt_path):
+        try:
+            gt_data = np.loadtxt(gt_path, delimiter=',')
+        except Exception as e:
+            print(f"加载GT数据时出错: {e}")
 
     with tqdm(total=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), desc="可视化跟踪结果", ncols=80) as pbar:
         while cap.isOpened():
@@ -662,8 +700,8 @@ def visualize_results(video_path, tracking_result, output_dir):
                 alpha = 0.2
                 cv2.addWeighted(overlay, alpha, frame, 1-alpha, 0, frame)
 
-                # 画YOLO检测框（红色）
-                if yolo_dets is not None:
+                # （已关闭）YOLO检测框
+                if False and yolo_dets is not None:
                     try:
                         dets_this_frame = yolo_dets[yolo_dets[:, 0] == frame_count]
                         for det in dets_this_frame:
@@ -693,10 +731,52 @@ def visualize_results(video_path, tracking_result, output_dir):
                     except Exception as e:
                         print(f"处理YOLO检测结果时出错: {e}")
 
+                # （已关闭）GT框绘制
+                if False and gt_data is not None:
+                    try:
+                        gt_this_frame = gt_data[gt_data[:, 0] == frame_count]
+                        for gt_row in gt_this_frame:
+                            try:
+                                gx, gy, gw, gh = map(int, gt_row[2:6])
+                                # 基本有效性检查
+                                if (np.isnan(gx) or np.isnan(gy) or np.isnan(gw) or np.isnan(gh) or gw <= 0 or gh <= 0):
+                                    continue
+                                # 裁剪到图像边界内
+                                gx_clipped = max(0, gx)
+                                gy_clipped = max(0, gy)
+                                gx2_clipped = min(width - 1, gx + gw)
+                                gy2_clipped = min(height - 1, gy + gh)
+                                cv2.rectangle(frame, (gx_clipped, gy_clipped), (gx2_clipped, gy2_clipped), (255, 0, 0), 2)
+                            except Exception as e:
+                                print(f"绘制GT框时出错: {e}")
+                    except Exception as e:
+                        print(f"处理GT数据时出错: {e}")
+
+                # 当前帧坐标稳定化处理：若新ID与上一帧某个框中心足够接近，则沿用上一帧该框坐标
+                curr_ids_in_frame = set(int(r[1]) for r in results)
                 for row in results:
                     try:
                         original_id = int(row[1])
                         x, y, w, h = map(int, row[2:6])
+
+                        # --------- ID切换稳定框 ---------
+                        cx = x + w/2
+                        cy = y + h/2
+                        best_prev_id = None
+                        best_dist = 1e9
+                        for pid, (px,py,pw,ph,pcx,pcy) in prev_boxes.items():
+                            if pid in curr_ids_in_frame:  # 该旧ID仍在本帧，跳过
+                                continue
+                            dist = ((pcx-cx)**2 + (pcy-cy)**2)**0.5
+                            thr = max(w,h, pw, ph) * 0.5  # 0.5倍框尺寸
+                            if dist < thr and dist < best_dist:
+                                best_dist = dist
+                                best_prev_id = pid
+                        if best_prev_id is not None:
+                            px,py,pw,ph,_,_ = prev_boxes[best_prev_id]
+                            x,y,w,h = int(px),int(py),int(pw),int(ph)
+                        # --------------------------------
+
                         
                         # 修改边界检查逻辑：允许靠近边界的框显示，只跳过完全无效的框
                         # 1. 基本有效性检查
@@ -766,10 +846,9 @@ def visualize_results(video_path, tracking_result, output_dir):
                             # 添加透明度效果
                             cv2.addWeighted(overlay_box, 0.7, frame, 0.3, 0, frame)
                         elif is_predicted:
-                            # 预测框——只绘制边框，内部透明
-                            color = (0,165,255)
+                            # 预测框——改为与跟踪框同色
+                            color = VISUALIZATION_PARAMS['track_color']
                             cv2.rectangle(frame, (x, y), (x + w, y + h), color, VISUALIZATION_PARAMS['track_thickness'])
-                            cv2.putText(frame, "Pred", (x, y - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                         else:
                             # 未计数常规框——只绘制边框，内部透明
                             color = VISUALIZATION_PARAMS['track_color']
@@ -793,12 +872,22 @@ def visualize_results(video_path, tracking_result, output_dir):
                         print(f"处理跟踪ID {row[1] if len(row) > 1 else '未知'}时出错: {e}")
                         continue
 
+                # 更新 prev_boxes 供下一帧匹配
+                new_prev = {}
+                for row in results:
+                    pid = int(row[1])
+                    x2, y2, w2, h2 = map(int, row[2:6])
+                    cx2 = x2 + w2/2
+                    cy2 = y2 + h2/2
+                    new_prev[pid] = (x2, y2, w2, h2, cx2, cy2)
+                prev_boxes = new_prev
+
                 # 显示计数信息
                 cv2.putText(frame, f"Left: {len(left_counted_ids)}", (10, height-90),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
                 cv2.putText(frame, f"Right: {len(right_counted_ids)}", (10, height-60),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
-                total_cnt = len(left_counted_ids) + len(right_counted_ids)
+                total_cnt = max(len(left_counted_ids), len(right_counted_ids))
                 cv2.putText(frame, f"Total: {total_cnt}", (10, height-30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
 
@@ -814,14 +903,14 @@ def visualize_results(video_path, tracking_result, output_dir):
     print(f"可视化视频已保存到: {vis_output_path}")
     print(f"左向计数: {len(left_counted_ids)}")
     print(f"右向计数: {len(right_counted_ids)}")
-    print(f"总计数: {len(left_counted_ids)+len(right_counted_ids)}")
+    print(f"总计数: {max(len(left_counted_ids), len(right_counted_ids))}")
 
     # 保存计数结果
     count_results = {
         'left_count': len(left_counted_ids),
         'right_count': len(right_counted_ids),
-        'total_ids': len(left_counted_ids) + len(right_counted_ids),
-        'mapped_ids': len(left_counted_ids) + len(right_counted_ids)
+        'total_ids': max(len(left_counted_ids), len(right_counted_ids)),
+        'mapped_ids': max(len(left_counted_ids), len(right_counted_ids))
     }
     count_file = os.path.join(output_dir, "count_results.json")
     with open(count_file, 'w') as f:
@@ -1025,7 +1114,7 @@ def main():
         
         # 第6步: 可视化结果
         print("\n步骤6: 可视化结果...")
-        visualize_results(params['video_path'], tracking_result, params['output_dir'])
+        visualize_results(params['video_path'], tracking_result, params['output_dir'], params['gt_path'])
         
         # print("\n=== 评估完成 ===")
         print(f"所有结果已保存到: {params['output_dir']}")

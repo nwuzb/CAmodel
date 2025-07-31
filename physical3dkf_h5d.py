@@ -126,10 +126,16 @@ class Physical3DKF_H5D:
             u_m,v_m,h_m = meas
             z = meas
         z_pred, S, H_jac = self._project(mean,cov)
+        Z_prev = float(mean[2])  # 预测深度，用于单调约束
         K = cov @ H_jac.T @ np.linalg.inv(S)  # (5x3)
         innovation = z - z_pred
         mean_prev_uv = mean[:2].copy()
         mean = mean + K @ innovation
+        # --- 深度单调性约束：不允许远离相机 ---
+        if mean[2] > Z_prev:
+            mean[2] = Z_prev
+            if mean[3] > 0:
+                mean[3] = 0.0  # 截断正向速度
         cov = cov - K @ S @ K.T
 
         # --- 一致性修正：确保投影后像素高与观测一致 ---
